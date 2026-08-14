@@ -511,6 +511,25 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
             _sub(phy_el, "name", physical)
 
 
+def _validate_bus_port_maps(bus_interfaces: dict[str, dict], ports: list[dict]) -> None:
+    """
+    Verify that every physical port name mapped in busInterfaces[...].ports
+    actually exists on the parsed module. Exits with every mismatch found
+    across all interfaces, rather than stopping at the first one.
+    """
+    valid_names = {p["name"] for p in ports}
+    errors = []
+    for iface_name, iface in bus_interfaces.items():
+        for logical, physical in iface.get("ports", {}).items():
+            if physical not in valid_names:
+                errors.append(
+                    f"busInterface '{iface_name}': logical port '{logical}' maps to "
+                    f"'{physical}', which is not a port of this module"
+                )
+    if errors:
+        sys.exit("ERROR: invalid port mapping(s) in metadata file:\n  " + "\n  ".join(errors))
+
+
 # ---------------------------------------------------------------------------
 # Top-level generator
 # ---------------------------------------------------------------------------
@@ -529,6 +548,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     module_name = _text(header.get("name", {}))
     params      = _extract_parameters(header)
     ports       = _extract_ports(header)
+    _validate_bus_port_maps(bus_interfaces or {}, ports)
 
     # ------------------------------------------------------------------ #
     # 2. Build XML                                                         #
