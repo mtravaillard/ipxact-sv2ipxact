@@ -12,10 +12,18 @@ Usage
     python sv2ipxact.py
         --input   <module.sv>
         --output  <component.xml>
-        --vendor  <CERN>
-        --library <IP_TEST>
-        [--version  <1.0>]
+        --meta    <module.ipxact.json>
         [--define   <SYM> [<SYM> …]]
+
+The --meta file is a small JSON document giving the VLNV vendor/library
+(and optionally version, default "1.0") for the component — the "name"
+field of the VLNV always comes from the parsed module name:
+
+    {
+        "vendor":  "CERN",
+        "library": "IP_TEST",
+        "version": "1.0"
+    }
 
 Dependencies
 ------------
@@ -496,17 +504,28 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
 # CLI
 # ---------------------------------------------------------------------------
 
+def _load_meta(meta_file: Path) -> tuple[str, str, str]:
+    """Read the --meta JSON file and return (vendor, library, version)."""
+    meta = json.loads(meta_file.read_text())
+    try:
+        vendor  = meta["vendor"]
+        library = meta["library"]
+    except KeyError as exc:
+        sys.exit(f"ERROR: metadata file {meta_file} is missing required field {exc}")
+    version = meta.get("version", "1.0")
+    return vendor, library, version
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Convert a SystemVerilog module to an IP-XACT 2022 component XML.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--input",   required=True,  type=Path)
-    p.add_argument("--output",  required=True,  type=Path)
-    p.add_argument("--vendor",  required=True)
-    p.add_argument("--library", required=True)
-    p.add_argument("--version", default="1.0")
-    p.add_argument("--define",  nargs="+", default=[], metavar="SYM")
+    p.add_argument("--input",  required=True, type=Path)
+    p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--meta",   required=True, type=Path,
+                    help="JSON file with the component's vendor/library[/version]")
+    p.add_argument("--define", nargs="+", default=[], metavar="SYM")
     return p.parse_args()
 
 
@@ -514,12 +533,15 @@ def main() -> None:
     args = _parse_args()
     if not args.input.exists():
         sys.exit(f"ERROR: input file not found: {args.input}")
+    if not args.meta.exists():
+        sys.exit(f"ERROR: metadata file not found: {args.meta}")
+    vendor, library, version = _load_meta(args.meta)
     generate_ipxact(
         sv_file  = args.input,
         out_file = args.output,
-        vendor   = args.vendor,
-        library  = args.library,
-        version  = args.version,
+        vendor   = vendor,
+        library  = library,
+        version  = version,
         defines  = args.define,
     )
 
