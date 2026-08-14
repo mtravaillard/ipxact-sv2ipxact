@@ -1,0 +1,23 @@
+{
+    "vendor":  "CERN",
+    "library": "IP_TEST",
+    "version": "1.0",
+    "busInterfaces": {
+        "apb": {
+            "bus":  "cern.ch:socgen:apb4:1.0",
+            "mode": "target",
+            "ports": {
+                "PCLK":    "pclk",
+                "PRESETn": "presetn",
+                "PSEL":    "psel",
+                "PENABLE": "penable",
+                "PWRITE":  "pwrite",
+                "PADDR":   "paddr",
+                "PWDATA":  "pwdata",
+                "PRDATA":  "prdata",
+                "PREADY":  "pready",
+                "PSLVERR": "pslverr"
+            }
+        }
+    }
+}

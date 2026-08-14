@@ -21,3 +21,8 @@ sv2ipxact(
     SV_FILE   "./openhwgroup/ibex.sv"
     META_FILE "./openhwgroup/ibex.ipxact.json"
 )
+
+sv2ipxact(
+    SV_FILE   "./apb_gpio/apb_gpio.sv"
+    META_FILE "./apb_gpio/apb_gpio.ipxact.json"
+)
