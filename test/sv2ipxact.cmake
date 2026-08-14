@@ -5,27 +5,31 @@
 #
 #   sv2ipxact(
 #       SV_FILE     <path/to/module.sv>    # input SystemVerilog file
+#       META_FILE   <path/to/module.json>  # VLNV metadata (vendor/library[/version])
 #       OUTDIR      <path/to/output/dir>   # where the .xml is written
-#       VENDOR      <vendor-string>        # VLNV vendor
-#       LIBRARY     <library-string>       # VLNV library
-#       [VERSION    <version-string>]      # VLNV version (default: "1.0")
 #       [PKG_FILES  <pkg1.sv> …]           # package files referenced by the module
 #       [DEFINES    <SYM> …]               # preprocessor symbols for `ifdef resolution
 #   )
+#
+# META_FILE is a small JSON file giving the component's VLNV vendor and
+# library (and optionally version, default "1.0") — see sv2ipxact.py's
+# docstring for the exact schema. The VLNV "name" always comes from the
+# parsed SV module name, not from this file.
 #
 # The output file is named <module-name>.xml, where <module-name> is derived
 # from the SV filename stem (the actual parsed module name is set by the script
 # itself inside the XML).
 #
 # Requirements:
-#   - CMake >= 3.18 (find_package(Python3) with Interpreter component)
+#   - CMake >= 3.19 (find_package(Python3) with Interpreter component; string(JSON ...))
 #   - Python 3 with pyslang installed  (pip install pyslang)
 #
 # The custom target is named:
-#   <VENDOR>_<LIBRARY>_<stem>_sv2ipxact
-# and is added to the ALL target so it always runs during a normal build.
-# The variable SV2IPXACT_OUTPUT_FILE is set in the caller's scope to the
-# absolute path of the generated XML file.
+#   <vendor>_<library>_<stem>_sv2ipxact
+# (vendor/library are read from META_FILE at configure time) and is added to
+# the ALL target so it always runs during a normal build. The variable
+# SV2IPXACT_OUTPUT_FILE is set in the caller's scope to the absolute path of
+# the generated XML file.
 #]]
 
 set(_SV2IPXACT_DEFAULT_SCRIPT
@@ -35,7 +39,7 @@ set(_SV2IPXACT_DEFAULT_SCRIPT
 
 function(sv2ipxact)
     set(options )
-    set(oneValueArgs SV_FILE OUTDIR VENDOR LIBRARY VERSION)
+    set(oneValueArgs SV_FILE META_FILE OUTDIR)
     set(multiValueArgs PKG_FILES DEFINES)
 
     cmake_parse_arguments(
@@ -46,15 +50,11 @@ function(sv2ipxact)
         ${ARGN}
     )
 
-    foreach(_req SV_FILE VENDOR LIBRARY)
+    foreach(_req SV_FILE META_FILE)
         if(NOT DEFINED ARG_${_req})
             message(FATAL_ERROR "sv2ipxact: missing required argument ${_req}")
         endif()
     endforeach()
-
-    if(NOT DEFINED ARG_VERSION)
-        set(ARG_VERSION "1.0")
-    endif()
 
     if(NOT ARG_OUTDIR)
         set(ARG_OUTDIR "${PROJECT_BINARY_DIR}/ipxact")
@@ -62,6 +62,7 @@ function(sv2ipxact)
 
     get_filename_component(_sv_abs   "${ARG_SV_FILE}"               ABSOLUTE)
     get_filename_component(_sv_stem  "${ARG_SV_FILE}"               NAME_WE)
+    get_filename_component(_meta_abs "${ARG_META_FILE}"             ABSOLUTE)
     get_filename_component(_out_abs  "${ARG_OUTDIR}"                ABSOLUTE)
     get_filename_component(_tool_abs "${_SV2IPXACT_DEFAULT_SCRIPT}" ABSOLUTE)
 
@@ -72,11 +73,23 @@ function(sv2ipxact)
             "sv2ipxact: SV_FILE not found:\n  ${_sv_abs}")
     endif()
 
+    if(NOT EXISTS "${_meta_abs}")
+        message(FATAL_ERROR
+            "sv2ipxact: META_FILE not found:\n  ${_meta_abs}")
+    endif()
+
     if(NOT EXISTS "${_tool_abs}")
         message(FATAL_ERROR
             "sv2ipxact: sv2ipxact.py not found at:  ${_tool_abs}\n"
             "Set _SV2IPXACT_DEFAULT_SCRIPT or place sv2ipxact.py next to sv2ipxact.cmake.")
     endif()
+
+    # Read vendor/library (required) straight out of META_FILE, just for
+    # naming the target and the build comment — sv2ipxact.py re-reads the
+    # same file at build time and remains the single source of truth.
+    file(READ "${_meta_abs}" _meta_json)
+    string(JSON _vendor  GET "${_meta_json}" "vendor")
+    string(JSON _library GET "${_meta_json}" "library")
 
     set(_pkg_args)
     set(_pkg_deps)
@@ -109,23 +122,22 @@ function(sv2ipxact)
         OUTPUT  "${_xml_output}"
         COMMAND "${Python3_EXECUTABLE}"
                     "${_tool_abs}"
-                    --input   "${_sv_abs}"
-                    --output  "${_xml_output}"
-                    --vendor  "${ARG_VENDOR}"
-                    --library "${ARG_LIBRARY}"
-                    --version "${ARG_VERSION}"
+                    --input  "${_sv_abs}"
+                    --output "${_xml_output}"
+                    --meta   "${_meta_abs}"
                     ${_pkg_args}
                     ${_define_args}
         DEPENDS
             "${_sv_abs}"
+            "${_meta_abs}"
             "${_tool_abs}"
             ${_pkg_deps}
         COMMENT
-            "[sv2ipxact] ${_sv_stem}.sv → ${_sv_stem}.xml (${ARG_VENDOR}:${ARG_LIBRARY}:${_sv_stem}:${ARG_VERSION})"
+            "[sv2ipxact] ${_sv_stem}.sv → ${_sv_stem}.xml (${_vendor}:${_library}:${_sv_stem})"
         VERBATIM
     )
 
-    add_custom_target("${ARG_VENDOR}_${ARG_LIBRARY}_${_sv_stem}_sv2ipxact" ALL
+    add_custom_target("${_vendor}_${_library}_${_sv_stem}_sv2ipxact" ALL
         DEPENDS "${_xml_output}"
     )
 
@@ -133,7 +145,7 @@ function(sv2ipxact)
 
     message(STATUS
         "[sv2ipxact] Registered target "
-        "'${ARG_VENDOR}_${ARG_LIBRARY}_${_sv_stem}_sv2ipxact': "
+        "'${_vendor}_${_library}_${_sv_stem}_sv2ipxact': "
         "${_sv_stem}.sv → ${_sv_stem}.xml"
     )
 endfunction()
