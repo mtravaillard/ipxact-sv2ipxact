@@ -17,13 +17,28 @@ Usage
 
 The --meta file is a small JSON document giving the VLNV vendor/library
 (and optionally version, default "1.0") for the component — the "name"
-field of the VLNV always comes from the parsed module name:
+field of the VLNV always comes from the parsed module name. It can also
+declare bus interfaces, mapping discrete SV ports onto the logical ports
+of a bus abstraction definition:
 
     {
         "vendor":  "CERN",
         "library": "IP_TEST",
-        "version": "1.0"
+        "version": "1.0",
+        "busInterfaces": {
+            "<interface-name>": {
+                "bus":   "<vendor>:<library>:<bus-def-name>:<version>",
+                "mode":  "initiator" | "target" | "master" | "slave",
+                "ports": {"<LOGICAL_NAME>": "<physical_port_name>", "<LOGICAL_NAME>": "<physical_port_name>", ...}
+            }
+        }
     }
+
+The abstraction definition is derived by convention as "<bus-def-name>_rtl"
+at the same vendor/library/version as "bus" — it is not given explicitly.
+Neither the logical names nor the mapped physical port names are validated
+against the abstraction definition or the parsed module here (see the
+design-description resolver steps for that).
 
 Dependencies
 ------------
@@ -419,12 +434,90 @@ def _build_interface_port(ports_el: ET.Element, bus_ifaces_el: ET.Element,
     )
 
 
+# Accepted values for a metadata busInterfaces[].mode field, mapped to the
+# IEEE 1685-2022 interfaceMode element name.
+_MODE_TAG = {
+    "initiator": "initiator",
+    "master":    "initiator",
+    "target":    "target",
+    "slave":     "target",
+}
+
+
+def _parse_vlnv(vlnv: str, what: str) -> dict[str, str]:
+    """Parse a 'vendor:library:name:version' string into its four fields."""
+    parts = vlnv.split(":")
+    if len(parts) != 4:
+        sys.exit(
+            f"ERROR: {what} must be a 'vendor:library:name:version' VLNV "
+            f"string, got: {vlnv!r}"
+        )
+    vendor, library, name, version = parts
+    return {"vendor": vendor, "library": library, "name": name, "version": version}
+
+
+def _set_vlnv_attrs(el: ET.Element, vlnv: dict) -> None:
+    for attr in ("vendor", "library", "name", "version"):
+        el.set(attr, str(vlnv.get(attr, "")))
+
+
+def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict) -> None:
+    """
+    Build an <ipxact:busInterface> from a metadata-file busInterfaces[name] entry:
+
+        <interface-name>: {
+            "bus":   "<vendor>:<library>:<bus-def-name>:<version>",
+            "mode":  "initiator" | "target" | "master" | "slave",
+            "ports": {"<LOGICAL_NAME>": "<physical_port_name>", ...}
+        }
+
+    The abstraction definition is derived by convention as "<bus-def-name>_rtl"
+    at the same vendor/library/version as "bus". Physical port existence and
+    mapping completeness are not validated here (see the design-description
+    resolver steps for that).
+    """
+    mode = str(iface.get("mode", "")).lower()
+    mode_tag = _MODE_TAG.get(mode)
+    if mode_tag is None:
+        sys.exit(
+            f"ERROR: busInterface '{name}': unknown mode '{iface.get('mode')}' "
+            "(expected initiator/target or master/slave)"
+        )
+
+    bus_type = _parse_vlnv(iface.get("bus", ""), f"busInterface '{name}' bus")
+    abs_type = {**bus_type, "name": f"{bus_type['name']}_rtl"}
+
+    bi_el = _sub(bus_ifaces_el, "busInterface")
+    _sub(bi_el, "name", name)
+
+    bt_el = _sub(bi_el, "busType")
+    _set_vlnv_attrs(bt_el, bus_type)
+
+    _sub(bi_el, mode_tag)
+
+    types_el = _sub(bi_el, "abstractionTypes")
+    type_el  = _sub(types_el, "abstractionType")
+    ref_el   = _sub(type_el, "abstractionRef")
+    _set_vlnv_attrs(ref_el, abs_type)
+
+    port_maps = iface.get("ports", {})
+    if port_maps:
+        maps_el = _sub(type_el, "portMaps")
+        for logical, physical in port_maps.items():
+            map_el = _sub(maps_el, "portMap")
+            log_el = _sub(map_el, "logicalPort")
+            _sub(log_el, "name", logical)
+            phy_el = _sub(map_el, "physicalPort")
+            _sub(phy_el, "name", physical)
+
+
 # ---------------------------------------------------------------------------
 # Top-level generator
 # ---------------------------------------------------------------------------
 
 def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
-                    version: str, defines: list[str]) -> None:
+                    version: str, defines: list[str],
+                    bus_interfaces: dict[str, dict] | None = None) -> None:
     """Full pipeline: parse SyntaxTree JSON → extract header → write XML."""
 
     # ------------------------------------------------------------------ #
@@ -478,6 +571,9 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
         else:
             _build_wire_port(ports_el, port)
 
+    for iface_name, iface in (bus_interfaces or {}).items():
+        _build_meta_bus_interface(bus_ifaces_el, iface_name, iface)
+
     # Insert busInterfaces before model if any interface ports were found.
     if len(bus_ifaces_el):
         root.insert(list(root).index(model_el), bus_ifaces_el)
@@ -504,16 +600,20 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
 # CLI
 # ---------------------------------------------------------------------------
 
-def _load_meta(meta_file: Path) -> tuple[str, str, str]:
-    """Read the --meta JSON file and return (vendor, library, version)."""
+def _load_meta(meta_file: Path) -> dict:
+    """Read the --meta JSON file and return vendor/library/version/busInterfaces."""
     meta = json.loads(meta_file.read_text())
     try:
         vendor  = meta["vendor"]
         library = meta["library"]
     except KeyError as exc:
         sys.exit(f"ERROR: metadata file {meta_file} is missing required field {exc}")
-    version = meta.get("version", "1.0")
-    return vendor, library, version
+    return {
+        "vendor":         vendor,
+        "library":        library,
+        "version":        meta.get("version", "1.0"),
+        "bus_interfaces": meta.get("busInterfaces", {}),
+    }
 
 
 def _parse_args() -> argparse.Namespace:
@@ -535,14 +635,15 @@ def main() -> None:
         sys.exit(f"ERROR: input file not found: {args.input}")
     if not args.meta.exists():
         sys.exit(f"ERROR: metadata file not found: {args.meta}")
-    vendor, library, version = _load_meta(args.meta)
+    meta = _load_meta(args.meta)
     generate_ipxact(
-        sv_file  = args.input,
-        out_file = args.output,
-        vendor   = vendor,
-        library  = library,
-        version  = version,
-        defines  = args.define,
+        sv_file        = args.input,
+        out_file       = args.output,
+        vendor         = meta["vendor"],
+        library        = meta["library"],
+        version        = meta["version"],
+        defines        = args.define,
+        bus_interfaces = meta["bus_interfaces"],
     )
 
 
