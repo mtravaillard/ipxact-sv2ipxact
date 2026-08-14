@@ -31,13 +31,7 @@ from pathlib        import Path
 from xml.etree      import ElementTree as ET
 from xml.dom        import minidom
 
-try:
-    import pyslang
-except ImportError:
-    sys.exit(
-        "ERROR: pyslang is not installed.\n"
-        "       Run:  pip install pyslang"
-    )
+import pyslang
 
 
 # ---------------------------------------------------------------------------
@@ -81,13 +75,12 @@ def _parse_sv(sv_file: Path, defines: list[str]) -> dict:
     if defines:
         sm   = pyslang.SourceManager()
         bag  = pyslang.Bag()
-        opts = pyslang.PreprocessorOptions()
-        for sym in defines:
-            opts.predefineNames.append(sym)
-        bag.set(opts)
-        tree = pyslang.SyntaxTree.fromFile(str(sv_file), sm, bag)
+        opts = pyslang.parsing.PreprocessorOptions()
+        opts.predefines = list(defines)
+        bag.preprocessorOptions = opts
+        tree = pyslang.syntax.SyntaxTree.fromFile(str(sv_file), sm, bag)
     else:
-        tree = pyslang.SyntaxTree.fromFile(str(sv_file))
+        tree = pyslang.syntax.SyntaxTree.fromFile(str(sv_file))
 
     return json.loads(tree.to_json())
 
