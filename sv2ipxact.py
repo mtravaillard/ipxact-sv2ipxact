@@ -54,6 +54,21 @@ just the type name recorded (ipxact:structPortTypeDefs) — field widths and
 sub-ports are not expanded, since that would require elaboration or
 package loading, which this tool deliberately does not do.
 
+A genuine SystemVerilog `interface`-typed port (e.g. 'apb_if.slave apb') is
+emitted as an ipxact:transactional port. It already groups its own signals,
+so instead of a "ports" mapping, its busInterfaces entry references it by
+name:
+
+    "<interface-name>": {
+        "bus":           "<vendor>:<library>:<bus-def-name>:<version>",
+        "mode":          "initiator" | "target" | "master" | "slave",
+        "interfacePort": "<physical_port_name>"
+    }
+
+Every `interface`-typed port in the module MUST be referenced by exactly one
+busInterfaces[...].interfacePort — there is no fallback guess for its real
+bus VLNV or mode, so an undescribed one is a hard error, not a placeholder.
+
 Dependencies
 ------------
     pip install pyslang
@@ -342,11 +357,13 @@ def _extract_ports(header: dict) -> list[dict]:
         # Interface port: header kind is InterfacePortHeader.
         if port_header.get("kind") == "InterfacePortHeader":
             iface_name = _text(port_header.get("nameOrKeyword", {}))
+            modport    = _text(port_header.get("modport", {}).get("member", {}))
             result.append({
                 "name":         name,
                 "direction":    direction,
                 "is_interface": True,
                 "iface_type":   iface_name,
+                "modport":      modport,
                 "packed_dims":  [],
                 "unpacked_dims": [],
             })
@@ -465,29 +482,21 @@ def _build_structured_port(ports_el: ET.Element, port: dict) -> None:
     )
 
 
-def _build_interface_port(ports_el: ET.Element, bus_ifaces_el: ET.Element,
-                          port: dict) -> None:
-    # Transactional port entry.
+def _build_transactional_port(ports_el: ET.Element, port: dict) -> None:
+    """
+    Build the physical <ipxact:port> entry for a genuine SV `interface`-typed
+    port (e.g. 'apb_if.slave apb'), as an ipxact:transactional port.
+
+    This only records the port itself. The busInterface that describes its
+    real bus VLNV and mode comes entirely from the metadata file's
+    busInterfaces[...].interfacePort — see _build_meta_bus_interface and
+    _validate_bus_interfaces, which require every such port to be described
+    there (no guessing).
+    """
     port_el  = _sub(ports_el, "port")
     _sub(port_el, "name", port["name"])
     trans_el = _sub(port_el, "transactional")
-    _sub(trans_el, "direction", "requires")
     _sub(trans_el, "initiative", "requires")
-
-    # Placeholder busInterface — VLNV unknown until user supplies a mapping.
-    bi_el = _sub(bus_ifaces_el, "busInterface")
-    _sub(bi_el, "name", port["name"])
-    bt_el = _sub(bi_el, "busType")
-    bt_el.set("vendor",  "unknown")
-    bt_el.set("library", "unknown")
-    bt_el.set("name",    port.get("iface_type", "unknown"))
-    bt_el.set("version", "1.0")
-
-    print(
-        f"WARNING: interface port '{port['name']}' emitted with placeholder "
-        "busInterface VLNV (vendor=unknown).",
-        file=sys.stderr,
-    )
 
 
 # Accepted values for a metadata busInterfaces[].mode field, mapped to the
@@ -532,7 +541,9 @@ def _split_physical_port(physical: str) -> tuple[str, list[str]]:
 
 def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict) -> None:
     """
-    Build an <ipxact:busInterface> from a metadata-file busInterfaces[name] entry:
+    Build an <ipxact:busInterface> from a metadata-file busInterfaces[name] entry.
+
+    Either a discrete/struct-signal mapping:
 
         <interface-name>: {
             "bus":   "<vendor>:<library>:<bus-def-name>:<version>",
@@ -540,10 +551,19 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
             "ports": {"<LOGICAL_NAME>": "<physical_port_name>", ...}
         }
 
+    or a reference to a genuine SV `interface`-typed port, which already
+    groups its own signals so no port-level mapping is needed:
+
+        <interface-name>: {
+            "bus":           "<vendor>:<library>:<bus-def-name>:<version>",
+            "mode":          "initiator" | "target" | "master" | "slave",
+            "interfacePort": "<physical_port_name>"
+        }
+
     The abstraction definition is derived by convention as "<bus-def-name>_rtl"
     at the same vendor/library/version as "bus". Physical port existence and
-    mapping completeness are not validated here (see the design-description
-    resolver steps for that).
+    mapping completeness are not validated here (see _validate_bus_interfaces
+    and the design-description resolver steps for that).
     """
     mode = str(iface.get("mode", "")).lower()
     mode_tag = _MODE_TAG.get(mode)
@@ -554,7 +574,6 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
         )
 
     bus_type = _parse_vlnv(iface.get("bus", ""), f"busInterface '{name}' bus")
-    abs_type = {**bus_type, "name": f"{bus_type['name']}_rtl"}
 
     bi_el = _sub(bus_ifaces_el, "busInterface")
     _sub(bi_el, "name", name)
@@ -562,41 +581,82 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
     bt_el = _sub(bi_el, "busType")
     _set_vlnv_attrs(bt_el, bus_type)
 
-    types_el = _sub(bi_el, "abstractionTypes")
-    type_el  = _sub(types_el, "abstractionType")
-    ref_el   = _sub(type_el, "abstractionRef")
-    _set_vlnv_attrs(ref_el, abs_type)
+    # An interfacePort already groups its own signals (it's a genuine SV
+    # `interface`), so there's no logical<->physical wire mapping to declare
+    # — just the bus identity and mode.
+    if not iface.get("interfacePort"):
+        abs_type = {**bus_type, "name": f"{bus_type['name']}_rtl"}
+        types_el = _sub(bi_el, "abstractionTypes")
+        type_el  = _sub(types_el, "abstractionType")
+        ref_el   = _sub(type_el, "abstractionRef")
+        _set_vlnv_attrs(ref_el, abs_type)
 
-    port_maps = iface.get("ports", {})
-    if port_maps:
-        maps_el = _sub(type_el, "portMaps")
-        for logical, physical in port_maps.items():
-            port_name, sub_path = _split_physical_port(physical)
-            map_el = _sub(maps_el, "portMap")
-            log_el = _sub(map_el, "logicalPort")
-            _sub(log_el, "name", logical)
-            phy_el = _sub(map_el, "physicalPort")
-            _sub(phy_el, "name", port_name)
-            for sub_name in sub_path:
-                sub_el = _sub(phy_el, "subPort")
-                _sub(sub_el, "name", sub_name)
+        port_maps = iface.get("ports", {})
+        if port_maps:
+            maps_el = _sub(type_el, "portMaps")
+            for logical, physical in port_maps.items():
+                port_name, sub_path = _split_physical_port(physical)
+                map_el = _sub(maps_el, "portMap")
+                log_el = _sub(map_el, "logicalPort")
+                _sub(log_el, "name", logical)
+                phy_el = _sub(map_el, "physicalPort")
+                _sub(phy_el, "name", port_name)
+                for sub_name in sub_path:
+                    sub_el = _sub(phy_el, "subPort")
+                    _sub(sub_el, "name", sub_name)
 
     _sub(bi_el, mode_tag)
 
 
-def _validate_bus_port_maps(bus_interfaces: dict[str, dict], ports: list[dict]) -> None:
+def _validate_bus_interfaces(bus_interfaces: dict[str, dict], ports: list[dict]) -> None:
     """
-    Verify that every physical port mapped in busInterfaces[...].ports
-    actually exists on the parsed module, and that a dotted sub-field
-    reference (e.g. 'apb_req_i.psel') only targets a struct/typedef-typed
-    port. The sub-field name itself can't be checked without elaboration.
-    Exits with every mismatch found across all interfaces, rather than
-    stopping at the first one.
+    Verify the metadata file's busInterfaces against the parsed module:
+
+    - Every physical port mapped in a "ports" entry actually exists, and a
+      dotted sub-field reference (e.g. 'apb_req_i.psel') only targets a
+      struct/typedef-typed port (the field name itself can't be checked
+      without elaboration).
+    - Every "interfacePort" reference exists and is a genuine SV
+      `interface`-typed port, and an entry doesn't set both "ports" and
+      "interfacePort" (ambiguous — pick one).
+    - Every genuine SV `interface`-typed port in the module is referenced by
+      exactly one busInterfaces[...].interfacePort — there is no fallback
+      guess for its bus VLNV/mode, so an undescribed one is an error, not a
+      silently-placeholder'd component.
+
+    Exits with every mismatch found, rather than stopping at the first one.
     """
     by_name = {p["name"]: p for p in ports}
     errors = []
+    referenced_iface_ports = set()
+
     for iface_name, iface in bus_interfaces.items():
-        for logical, physical in iface.get("ports", {}).items():
+        interface_port = iface.get("interfacePort")
+        port_maps       = iface.get("ports", {})
+
+        if interface_port:
+            if port_maps:
+                errors.append(
+                    f"busInterface '{iface_name}': has both 'interfacePort' and "
+                    "'ports' — an interfacePort already groups its own signals, "
+                    "use only one"
+                )
+            port = by_name.get(interface_port)
+            if port is None:
+                errors.append(
+                    f"busInterface '{iface_name}': interfacePort '{interface_port}' "
+                    "is not a port of this module"
+                )
+            elif not port["is_interface"]:
+                errors.append(
+                    f"busInterface '{iface_name}': interfacePort '{interface_port}' "
+                    "is not a SystemVerilog interface-typed port"
+                )
+            else:
+                referenced_iface_ports.add(interface_port)
+            continue
+
+        for logical, physical in port_maps.items():
             port_name, sub_path = _split_physical_port(physical)
             port = by_name.get(port_name)
             if port is None:
@@ -610,8 +670,17 @@ def _validate_bus_port_maps(bus_interfaces: dict[str, dict], ports: list[dict]) 
                     f"'{physical}', but '{port_name}' is not a struct/typedef-typed "
                     "port — it has no sub-fields to map into"
                 )
+
+    for port in ports:
+        if port["is_interface"] and port["name"] not in referenced_iface_ports:
+            errors.append(
+                f"interface port '{port['name']}' (modport '{port['modport']}') has no "
+                "matching busInterfaces entry — add one with "
+                f"\"interfacePort\": \"{port['name']}\" in the metadata file"
+            )
+
     if errors:
-        sys.exit("ERROR: invalid port mapping(s) in metadata file:\n  " + "\n  ".join(errors))
+        sys.exit("ERROR: invalid busInterfaces in metadata file:\n  " + "\n  ".join(errors))
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +701,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     module_name = _text(header.get("name", {}))
     params      = _extract_parameters(header)
     ports       = _extract_ports(header)
-    _validate_bus_port_maps(bus_interfaces or {}, ports)
+    _validate_bus_interfaces(bus_interfaces or {}, ports)
 
     # ------------------------------------------------------------------ #
     # 2. Build XML                                                         #
@@ -647,7 +716,8 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     _sub(root, "description",
          f"Auto-generated from {sv_file.name} by sv2ipxact")
 
-    # busInterfaces container — attached to root only if interface ports exist.
+    # busInterfaces container — attached to root only if the metadata file
+    # declares any busInterfaces entries.
     bus_ifaces_el = ET.Element(_tag("busInterfaces"))
 
     # model
@@ -671,7 +741,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     ports_el = _sub(model_el, "ports")
     for port in ports:
         if port["is_interface"]:
-            _build_interface_port(ports_el, bus_ifaces_el, port)
+            _build_transactional_port(ports_el, port)
         elif port["is_struct"]:
             _build_structured_port(ports_el, port)
         else:
@@ -680,7 +750,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     for iface_name, iface in (bus_interfaces or {}).items():
         _build_meta_bus_interface(bus_ifaces_el, iface_name, iface)
 
-    # Insert busInterfaces before model if any interface ports were found.
+    # Insert busInterfaces before model if any were declared.
     if len(bus_ifaces_el):
         root.insert(list(root).index(model_el), bus_ifaces_el)
 
