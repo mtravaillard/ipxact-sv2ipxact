@@ -29,7 +29,7 @@ of a bus abstraction definition:
             "<interface-name>": {
                 "bus":   "<vendor>:<library>:<bus-def-name>:<version>",
                 "mode":  "initiator" | "target" | "master" | "slave",
-                "ports": {"<LOGICAL_NAME>": "<physical_port_name>", "<LOGICAL_NAME>": "<physical_port_name>", ...}
+                "ports": {"<LOGICAL_NAME>": "<physical_port_name>", ...}
             }
         }
     }
@@ -37,8 +37,22 @@ of a bus abstraction definition:
 The abstraction definition is derived by convention as "<bus-def-name>_rtl"
 at the same vendor/library/version as "bus" — it is not given explicitly.
 Neither the logical names nor the mapped physical port names are validated
-against the abstraction definition or the parsed module here (see the
-design-description resolver steps for that).
+against the abstraction definition here (see the design-description
+resolver steps for that) — but a mapped physical port IS checked to exist
+on the parsed module.
+
+A physical port value may address a named field of a struct/typedef-typed
+port (see "structured" ports below) using dot notation, e.g.
+"<physical_port_name>.<field_name>" — this emits an ipxact:subPort inside
+the portMap's physicalPort. Further dots address nested fields. The field
+name itself is not validated (no elaboration), only that the base port
+exists and is struct/typedef-typed.
+
+Ports whose declared type is a struct, union, or other named/scoped type
+(rather than a builtin vector type) are emitted as ipxact:structured with
+just the type name recorded (ipxact:structPortTypeDefs) — field widths and
+sub-ports are not expanded, since that would require elaboration or
+package loading, which this tool deliberately does not do.
 
 Dependencies
 ------------
@@ -302,7 +316,7 @@ def _extract_unpacked_dims(declarator: dict) -> list[tuple[str, str]]:
 def _extract_ports(header: dict) -> list[dict]:
     """
     Return a list of port dicts with keys:
-        name, direction, packed_dims, unpacked_dims, is_interface
+        name, direction, packed_dims, unpacked_dims, is_interface, is_struct, type_name
     """
     ports_node = header.get("ports", {})
     result     = []
@@ -342,10 +356,19 @@ def _extract_ports(header: dict) -> list[dict]:
         packed_dims   = _extract_packed_dims(data_type)
         unpacked_dims = _extract_unpacked_dims(declarator)
 
+        # A NamedType/ScopedType base (e.g. 'apb_req_t', 'my_pkg::my_req_t',
+        # or a 'parameter type' default) is a struct/union/typedef reference,
+        # not a builtin vector type — its width and field layout are unknown
+        # without elaboration, which this tool deliberately does not do.
+        is_struct = data_type.get("kind") in ("NamedType", "ScopedType")
+        type_name = _text(data_type) if is_struct else ""
+
         result.append({
             "name":          name,
             "direction":     direction,
             "is_interface":  False,
+            "is_struct":     is_struct,
+            "type_name":     type_name,
             "packed_dims":   packed_dims,
             "unpacked_dims": unpacked_dims,
         })
@@ -373,8 +396,7 @@ def _build_parameters(parent: ET.Element, params: list[dict]) -> None:
         el = _sub(params_el, "parameter")
         _sub(el, "name",  p["name"])
         _sub(el, "value", p["value"] or "0")
-        el.set("dataType", p["dataType"])
-        el.set("resolve",  "user")
+        el.set("resolve", "user")
 
 
 def _build_module_parameters(parent: ET.Element, params: list[dict]) -> None:
@@ -402,11 +424,45 @@ def _build_wire_port(ports_el: ET.Element, port: dict) -> None:
             _sub(vec_el, "right", right)
 
     if port["unpacked_dims"]:
-        arrays_el = _sub(wire_el, "arrays")
+        arrays_el = _sub(port_el, "arrays")
         for left, right in port["unpacked_dims"]:
             arr_el = _sub(arrays_el, "array")
             _sub(arr_el, "left",  left)
             _sub(arr_el, "right", right)
+
+
+def _build_structured_port(ports_el: ET.Element, port: dict) -> None:
+    """
+    Build an <ipxact:structured> port for a struct/union/typedef-typed SV
+    port (e.g. 'input apb_req_t apb_req_i'). Field layout and width are
+    unknown without elaboration or package loading, so only the type name
+    is recorded (ipxact:structPortTypeDefs) — no ipxact:subPorts are
+    emitted. See ipxact:portStructuredType in port.xsd.
+    """
+    port_el = _sub(ports_el, "port")
+    _sub(port_el, "name", port["name"])
+
+    struct_el = _sub(port_el, "structured")
+    kind_el   = _sub(struct_el, "struct")
+    kind_el.set("direction", port["direction"])
+
+    defs_el = _sub(struct_el, "structPortTypeDefs")
+    def_el  = _sub(defs_el, "structPortTypeDef")
+    _sub(def_el, "typeName", port["type_name"])
+
+    if port["unpacked_dims"]:
+        arrays_el = _sub(port_el, "arrays")
+        for left, right in port["unpacked_dims"]:
+            arr_el = _sub(arrays_el, "array")
+            _sub(arr_el, "left",  left)
+            _sub(arr_el, "right", right)
+
+    print(
+        f"WARNING: port '{port['name']}' has struct/typedef type "
+        f"'{port['type_name']}' — emitted as ipxact:structured with no "
+        "field breakdown (width/subPorts unknown without elaboration).",
+        file=sys.stderr,
+    )
 
 
 def _build_interface_port(ports_el: ET.Element, bus_ifaces_el: ET.Element,
@@ -461,6 +517,19 @@ def _set_vlnv_attrs(el: ET.Element, vlnv: dict) -> None:
         el.set(attr, str(vlnv.get(attr, "")))
 
 
+def _split_physical_port(physical: str) -> tuple[str, list[str]]:
+    """
+    Split a metadata 'ports' physical-port value into (port_name, subport_path).
+
+    'apb_req_i' -> ('apb_req_i', []) — maps to the whole port.
+    'apb_req_i.psel' -> ('apb_req_i', ['psel']) — maps to a named field of a
+    struct/typedef-typed port (ipxact:physicalPort/ipxact:subPort). Further
+    dots address nested fields, one ipxact:subPort per path segment.
+    """
+    parts = physical.split(".")
+    return parts[0], parts[1:]
+
+
 def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict) -> None:
     """
     Build an <ipxact:busInterface> from a metadata-file busInterfaces[name] entry:
@@ -493,8 +562,6 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
     bt_el = _sub(bi_el, "busType")
     _set_vlnv_attrs(bt_el, bus_type)
 
-    _sub(bi_el, mode_tag)
-
     types_el = _sub(bi_el, "abstractionTypes")
     type_el  = _sub(types_el, "abstractionType")
     ref_el   = _sub(type_el, "abstractionRef")
@@ -504,27 +571,44 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
     if port_maps:
         maps_el = _sub(type_el, "portMaps")
         for logical, physical in port_maps.items():
+            port_name, sub_path = _split_physical_port(physical)
             map_el = _sub(maps_el, "portMap")
             log_el = _sub(map_el, "logicalPort")
             _sub(log_el, "name", logical)
             phy_el = _sub(map_el, "physicalPort")
-            _sub(phy_el, "name", physical)
+            _sub(phy_el, "name", port_name)
+            for sub_name in sub_path:
+                sub_el = _sub(phy_el, "subPort")
+                _sub(sub_el, "name", sub_name)
+
+    _sub(bi_el, mode_tag)
 
 
 def _validate_bus_port_maps(bus_interfaces: dict[str, dict], ports: list[dict]) -> None:
     """
-    Verify that every physical port name mapped in busInterfaces[...].ports
-    actually exists on the parsed module. Exits with every mismatch found
-    across all interfaces, rather than stopping at the first one.
+    Verify that every physical port mapped in busInterfaces[...].ports
+    actually exists on the parsed module, and that a dotted sub-field
+    reference (e.g. 'apb_req_i.psel') only targets a struct/typedef-typed
+    port. The sub-field name itself can't be checked without elaboration.
+    Exits with every mismatch found across all interfaces, rather than
+    stopping at the first one.
     """
-    valid_names = {p["name"] for p in ports}
+    by_name = {p["name"]: p for p in ports}
     errors = []
     for iface_name, iface in bus_interfaces.items():
         for logical, physical in iface.get("ports", {}).items():
-            if physical not in valid_names:
+            port_name, sub_path = _split_physical_port(physical)
+            port = by_name.get(port_name)
+            if port is None:
                 errors.append(
                     f"busInterface '{iface_name}': logical port '{logical}' maps to "
                     f"'{physical}', which is not a port of this module"
+                )
+            elif sub_path and not port["is_struct"]:
+                errors.append(
+                    f"busInterface '{iface_name}': logical port '{logical}' maps to "
+                    f"'{physical}', but '{port_name}' is not a struct/typedef-typed "
+                    "port — it has no sub-fields to map into"
                 )
     if errors:
         sys.exit("ERROR: invalid port mapping(s) in metadata file:\n  " + "\n  ".join(errors))
@@ -588,6 +672,8 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     for port in ports:
         if port["is_interface"]:
             _build_interface_port(ports_el, bus_ifaces_el, port)
+        elif port["is_struct"]:
+            _build_structured_port(ports_el, port)
         else:
             _build_wire_port(ports_el, port)
 

@@ -6,8 +6,8 @@
   <ipxact:library>socgen</ipxact:library>
   <ipxact:name>apb4</ipxact:name>
   <ipxact:version>1.0</ipxact:version>
+  <ipxact:description>Minimal APB4 bus definition, used as the sv2ipxact bus-interface test fixture.</ipxact:description>
   <ipxact:directConnection>true</ipxact:directConnection>
   <ipxact:isAddressable>true</ipxact:isAddressable>
   <ipxact:maxInitiators>1</ipxact:maxInitiators>
-  <ipxact:description>Minimal APB4 bus definition, used as the sv2ipxact bus-interface test fixture.</ipxact:description>
 </ipxact:busDefinition>
