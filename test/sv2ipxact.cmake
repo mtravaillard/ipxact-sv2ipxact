@@ -33,7 +33,7 @@
 #]]
 
 set(_SV2IPXACT_DEFAULT_SCRIPT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../sv2ipxact.py"
+    "${CMAKE_CURRENT_LIST_DIR}/../sv2ipxact.py"
     CACHE FILEPATH "Default path to sv2ipxact.py"
 )
 
@@ -65,6 +65,11 @@ function(sv2ipxact)
     get_filename_component(_meta_abs "${ARG_META_FILE}"             ABSOLUTE)
     get_filename_component(_out_abs  "${ARG_OUTDIR}"                ABSOLUTE)
     get_filename_component(_tool_abs "${_SV2IPXACT_DEFAULT_SCRIPT}" ABSOLUTE)
+    get_filename_component(_tool_dir "${_tool_abs}" DIRECTORY)
+
+    # sv2ipxact.py imports it own modules at run time.
+    # Modifying any of them should trigger a rebuild.
+    file(GLOB _module_deps CONFIGURE_DEPENDS "${_tool_dir}/*.py")
 
     set(_xml_output "${_out_abs}/${_sv_stem}.xml")
 
@@ -130,7 +135,7 @@ function(sv2ipxact)
         DEPENDS
             "${_sv_abs}"
             "${_meta_abs}"
-            "${_tool_abs}"
+            ${_module_deps}
             ${_pkg_deps}
         COMMENT
             "[sv2ipxact] ${_sv_stem}.sv → ${_sv_stem}.xml (${_vendor}:${_library}:${_sv_stem})"
