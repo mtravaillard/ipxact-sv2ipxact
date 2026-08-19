@@ -12,7 +12,7 @@ Usage
     python sv2ipxact.py
         --input   <module.sv>
         --output  <component.xml>
-        --meta    <module.ipxact.json>
+        --meta    <module_ipxact.json>
         [--define   <SYM> [<SYM> …]]
 
 The --meta file is a small JSON document giving the VLNV vendor/library

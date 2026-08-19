@@ -10,7 +10,7 @@ Only the module header (parameters and ports) is inspected via [`pyslang`](https
 python sv2ipxact.py \
     --input   my_module.sv \
     --output  my_module.xml \
-    --meta    my_module.ipxact.json \
+    --meta    my_module_ipxact.json \
     [--define SYM ...]
 ```
 
