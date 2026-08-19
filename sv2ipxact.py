@@ -69,15 +69,24 @@ Every `interface`-typed port in the module MUST be referenced by exactly one
 busInterfaces[...].interfacePort — there is no fallback guess for its real
 bus VLNV or mode, so an undescribed one is a hard error, not a placeholder.
 
+The metadata file can also declare "registerFile": a path (relative to the
+metadata file itself) to a SystemRDL file describing the component's
+register map, e.g. "registerFile": "my_module.rdl". It's compiled with
+systemrdl-compiler, exported to IP-XACT with peakrdl-ipxact, and merged
+into the generated component as an ipxact:memoryMaps element. See
+memory_map.py for how the peakrdl-ipxact output (IEEE 1685-2014, the only
+version it supports) is rebuilt as IEEE 1685-2022.
+
 Modules
 -------
     sv_parser.py       Parse the SV file into port/parameter dicts (pyslang).
     ipxact_builder.py   Build the "plain" component/port/parameter XML.
     bus_interfaces.py   Build and validate the metadata-driven busInterfaces.
+    memory_map.py       Convert a SystemRDL register file into ipxact:memoryMaps.
 
 Dependencies
 ------------
-    pip install pyslang
+    pip install -r python_requirements.txt
 """
 
 from __future__ import annotations
@@ -96,6 +105,7 @@ from ipxact_builder import (
     _build_wire_port, _build_structured_port, _build_transactional_port,
 )
 from bus_interfaces import _build_meta_bus_interface, _validate_bus_interfaces
+from memory_map import build_memory_maps
 
 SV2IPXACT_URL = "https://github.com/mtravaillard/ipxact-sv2ipxact"
 
@@ -106,7 +116,8 @@ SV2IPXACT_URL = "https://github.com/mtravaillard/ipxact-sv2ipxact"
 
 def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
                     version: str, defines: list[str],
-                    bus_interfaces: dict[str, dict] | None = None) -> None:
+                    bus_interfaces: dict[str, dict] | None = None,
+                    register_file: Path | None = None) -> None:
     """Full pipeline: parse SyntaxTree JSON → extract header → write XML."""
 
     # ------------------------------------------------------------------ #
@@ -171,6 +182,13 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     if len(bus_ifaces_el):
         root.insert(list(root).index(model_el), bus_ifaces_el)
 
+    # Insert memoryMaps before model (and after busInterfaces) if a
+    # registerFile was declared in the metadata.
+    if register_file:
+        memory_maps_el = build_memory_maps(register_file, vendor, library, version)
+        if memory_maps_el is not None:
+            root.insert(list(root).index(model_el), memory_maps_el)
+
     # component-level parameters
     _build_parameters(root, params)
 
@@ -232,6 +250,7 @@ def main() -> None:
     if not args.meta.exists():
         sys.exit(f"ERROR: metadata file not found: {args.meta}")
     meta = _load_meta(args.meta)
+    register_file = (args.meta.parent / meta["register_file"]) if meta["register_file"] else None
     generate_ipxact(
         sv_file        = args.input,
         out_file       = args.output,
@@ -240,6 +259,7 @@ def main() -> None:
         version        = meta["version"],
         defines        = args.define,
         bus_interfaces = meta["bus_interfaces"],
+        register_file  = register_file,
     )
 
 

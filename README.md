@@ -35,6 +35,7 @@ A small JSON file supplies what can't be inferred from the SV source alone: the 
 
 - `vendor` / `library` / `version` form the VLNV, the component's `name` always comes from the parsed module name, not from this file.
 - `busInterfaces` maps logical bus signals onto physical SV ports. A physical port value can be a plain port name, a dotted `port.field` reference into a struct/typedef-typed port, or, via `interfacePort` instead of `ports`, a genuine SV `interface`-typed port. Every `interface`-typed port in the module must be described this way; there is no fallback guess for its bus VLNV or mode.
+- `registerFile` is a path (relative to the metadata file) to a SystemRDL file describing the component's register map. It's compiled and merged in as an `ipxact:memoryMaps` element.
 
 See the module docstring in `sv2ipxact.py` for the full schema and more examples.
 
@@ -46,11 +47,14 @@ See the module docstring in `sv2ipxact.py` for the full schema and more examples
 | `sv_parser.py` | Parses the SV file into port/parameter dicts, via `pyslang` |
 | `ipxact_builder.py` | Builds the "plain" component/port/parameter XML |
 | `bus_interfaces.py` | Builds and validates the metadata-driven `busInterfaces` |
+| `memory_map.py` | Converts a SystemRDL register file into `ipxact:memoryMaps` |
 
 ## Dependencies
 
 - Python 3
-- [`pyslang`](https://pypi.org/project/pyslang/) >= 11.0.0 (`pip install pyslang`)
+- [`pyslang`](https://pypi.org/project/pyslang/) >= 11.0.0
+- [`systemrdl-compiler`](https://pypi.org/project/systemrdl-compiler/) >= 1.32.2
+- [`peakrdl-ipxact`](https://pypi.org/project/peakrdl-ipxact/) >= 3.5.0
 
 ## Tests
 
@@ -74,8 +78,8 @@ This tool is part of a plan to improve [SoCMake](https://github.com/HEP-SoC/SoCM
 - Component generation from SV module headers
 - Parameter and port extraction
 - Metadata-driven bus interface mapping (discrete, struct, and SV `interface`-typed ports)
+- Register/memory-map merging from SystemRDL, via PeakRDL-ipxact
 
 **Not yet implemented:**
-- Register/memory-map merging from SystemRDL, via PeakRDL-ipxact
 - Semantic-consistency-rule (SCR) validation
 - More
