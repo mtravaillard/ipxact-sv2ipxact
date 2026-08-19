@@ -1,5 +1,6 @@
 {
-    "vendor":  "CERN",
-    "library": "IP_TEST",
-    "version": "1.0"
+    "vendor":       "CERN",
+    "library":      "IP_TEST",
+    "version":      "1.0",
+    "registerFile": "basic_regs.rdl"
 }

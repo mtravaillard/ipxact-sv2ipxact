@@ -204,6 +204,7 @@ def _load_meta(meta_file: Path) -> dict:
         "library":        library,
         "version":        meta.get("version", "1.0"),
         "bus_interfaces": meta.get("busInterfaces", {}),
+        "register_file":  meta.get("registerFile"),
     }
 
 
