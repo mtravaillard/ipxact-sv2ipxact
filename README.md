@@ -82,4 +82,5 @@ This tool is part of a plan to improve [SoCMake](https://github.com/HEP-SoC/SoCM
 
 **Not yet implemented:**
 - Semantic-consistency-rule (SCR) validation
+- `fileSets`/`fileSetRef`: the generated component never records which `.sv` file the module actually came from, maybe should be considered to use metadatafile to give informations for fileset...
 - More
