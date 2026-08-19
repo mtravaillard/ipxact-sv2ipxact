@@ -1,7 +1,7 @@
-"""sv_parser.py — Parse a SystemVerilog module header into plain dicts.
+"""sv_parser.py: parse a SystemVerilog module header into plain dicts.
 
 Uses pyslang to parse the file into a SyntaxTree, then reads the tree as
-JSON.  Only the module header is inspected (parameters and ports) — no
+JSON.  Only the module header is inspected (parameters and ports), with no
 elaboration, no symbol resolution, no package loading needed.  Types,
 values, and dimension expressions are taken verbatim from the source text,
 which is exactly what IP-XACT expects.
@@ -26,7 +26,7 @@ def _parse_sv(sv_file: Path, defines: list[str]) -> dict:
 
     We use fromFile() with preprocessorDefines so that `ifdef blocks are
     resolved by the slang preprocessor before we read anything.  The result
-    is the concrete syntax tree (CST) serialised to JSON — no elaboration,
+    is the concrete syntax tree (CST) serialised to JSON, with no elaboration,
     no package resolution required.
     """
     if defines:
@@ -72,7 +72,7 @@ def _text(node: dict | None) -> str:
         # Skip trivia nodes (whitespace, comments, newlines).
         if kind in ("Whitespace", "EndOfLine", "BlockComment", "LineComment"):
             return ""
-        # If this node carries a 'text' leaf, return it — don't recurse further.
+        # If this node carries a 'text' leaf, return it, don't recurse further.
         if "text" in node and not any(
             isinstance(v, dict) for v in node.values()
         ):
@@ -109,7 +109,7 @@ def _type_text(type_node: dict) -> str:
     e.g. 'int', 'bit', 'int unsigned', 'logic [3:0]', 'my_pkg::my_t'.
     """
     if not type_node:
-        return "int"            # implicit type — SV default is int for parameter
+        return "int"            # implicit type, SV default is int for parameter
 
     kind = type_node.get("kind", "")
 
@@ -120,7 +120,7 @@ def _type_text(type_node: dict) -> str:
         signing = _text(type_node.get("signing")) if "signing" in type_node else ""
         return (kw + " " + signing).strip()
 
-    # Logic / bit / reg — may have packed dimensions.
+    # Logic / bit / reg: may have packed dimensions.
     if kind in ("LogicType", "BitType", "RegType"):
         kw   = _text(type_node.get("keyword", {}))
         dims = type_node.get("dimensions", [])
@@ -161,7 +161,7 @@ def _extract_parameters(header: dict) -> list[dict]:
     """
     Return a list of parameter dicts with keys: name, dataType, value.
 
-    Only 'parameter' keywords are included — 'localparam' nodes have
+    Only 'parameter' keywords are included; 'localparam' nodes have
     keyword.kind == 'LocalParamKeyword' and are skipped.
     """
     params_node = header.get("parameters")
@@ -252,7 +252,7 @@ def _extract_ports(header: dict) -> list[dict]:
         declarator  = port.get("declarator", {})
         name        = _text(declarator.get("name", {}))
 
-        # Direction — may be absent if inherited from previous port.
+        # Direction, may be absent if inherited from previous port.
         dir_node = port_header.get("direction", {})
         dir_kind = dir_node.get("kind", "")
         direction = _DIRECTION_MAP.get(dir_kind, last_direction)
@@ -280,7 +280,7 @@ def _extract_ports(header: dict) -> list[dict]:
 
         # A NamedType/ScopedType base (e.g. 'apb_req_t', 'my_pkg::my_req_t',
         # or a 'parameter type' default) is a struct/union/typedef reference,
-        # not a builtin vector type — its width and field layout are unknown
+        # not a builtin vector type, its width and field layout are unknown
         # without elaboration, which this tool deliberately does not do.
         is_struct = data_type.get("kind") in ("NamedType", "ScopedType")
         type_name = _text(data_type) if is_struct else ""

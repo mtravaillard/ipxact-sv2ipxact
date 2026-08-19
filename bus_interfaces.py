@@ -1,9 +1,9 @@
-"""bus_interfaces.py — Build and validate metadata-driven ipxact:busInterfaces.
+"""bus_interfaces.py: build and validate metadata-driven ipxact:busInterfaces.
 
 Everything here is derived from the --meta file's "busInterfaces" object,
 not from parsing the SystemVerilog itself (see sv_parser.py for that). This
 is deliberately the only source of truth for a bus interface's VLNV and
-mode — no guessing from port/modport names.
+mode, with no guessing from port/modport names.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ def _split_physical_port(physical: str) -> tuple[str, list[str]]:
     """
     Split a metadata 'ports' physical-port value into (port_name, subport_path).
 
-    'apb_req_i' -> ('apb_req_i', []) — maps to the whole port.
-    'apb_req_i.psel' -> ('apb_req_i', ['psel']) — maps to a named field of a
+    'apb_req_i' -> ('apb_req_i', []), maps to the whole port.
+    'apb_req_i.psel' -> ('apb_req_i', ['psel']), maps to a named field of a
     struct/typedef-typed port (ipxact:physicalPort/ipxact:subPort). Further
     dots address nested fields, one ipxact:subPort per path segment.
     """
@@ -96,8 +96,8 @@ def _build_meta_bus_interface(bus_ifaces_el: ET.Element, name: str, iface: dict)
     _set_vlnv_attrs(bt_el, bus_type)
 
     # An interfacePort already groups its own signals (it's a genuine SV
-    # `interface`), so there's no logical<->physical wire mapping to declare
-    # — just the bus identity and mode.
+    # `interface`), so there's no logical<->physical wire mapping to declare,
+    # just the bus identity and mode.
     if not iface.get("interfacePort"):
         abs_type = {**bus_type, "name": f"{bus_type['name']}_rtl"}
         types_el = _sub(bi_el, "abstractionTypes")
@@ -132,9 +132,9 @@ def _validate_bus_interfaces(bus_interfaces: dict[str, dict], ports: list[dict])
       without elaboration).
     - Every "interfacePort" reference exists and is a genuine SV
       `interface`-typed port, and an entry doesn't set both "ports" and
-      "interfacePort" (ambiguous — pick one).
+      "interfacePort" (ambiguous, pick one).
     - Every genuine SV `interface`-typed port in the module is referenced by
-      exactly one busInterfaces[...].interfacePort — there is no fallback
+      exactly one busInterfaces[...].interfacePort. There is no fallback
       guess for its bus VLNV/mode, so an undescribed one is an error, not a
       silently-placeholder'd component.
 
@@ -152,7 +152,7 @@ def _validate_bus_interfaces(bus_interfaces: dict[str, dict], ports: list[dict])
             if port_maps:
                 errors.append(
                     f"busInterface '{iface_name}': has both 'interfacePort' and "
-                    "'ports' — an interfacePort already groups its own signals, "
+                    "'ports'. An interfacePort already groups its own signals, "
                     "use only one"
                 )
             port = by_name.get(interface_port)
@@ -182,14 +182,14 @@ def _validate_bus_interfaces(bus_interfaces: dict[str, dict], ports: list[dict])
                 errors.append(
                     f"busInterface '{iface_name}': logical port '{logical}' maps to "
                     f"'{physical}', but '{port_name}' is not a struct/typedef-typed "
-                    "port — it has no sub-fields to map into"
+                    "port, it has no sub-fields to map into"
                 )
 
     for port in ports:
         if port["is_interface"] and port["name"] not in referenced_iface_ports:
             errors.append(
                 f"interface port '{port['name']}' (modport '{port['modport']}') has no "
-                "matching busInterfaces entry — add one with "
+                "matching busInterfaces entry, add one with "
                 f"\"interfacePort\": \"{port['name']}\" in the metadata file"
             )
 

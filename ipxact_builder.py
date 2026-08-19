@@ -1,4 +1,4 @@
-"""ipxact_builder.py — Build IP-XACT (IEEE 1685-2022) component XML elements.
+"""ipxact_builder.py: build IP-XACT (IEEE 1685-2022) component XML elements.
 
 Generic XML namespace helpers plus the builders for the "plain" parts of a
 component document: VLNV, component-level and module parameters, and wire /
@@ -102,7 +102,7 @@ def _build_structured_port(ports_el: ET.Element, port: dict) -> None:
     Build an <ipxact:structured> port for a struct/union/typedef-typed SV
     port (e.g. 'input apb_req_t apb_req_i'). Field layout and width are
     unknown without elaboration or package loading, so only the type name
-    is recorded (ipxact:structPortTypeDefs) — no ipxact:subPorts are
+    is recorded (ipxact:structPortTypeDefs); no ipxact:subPorts are
     emitted. See ipxact:portStructuredType in port.xsd.
     """
     port_el = _sub(ports_el, "port")
@@ -125,7 +125,7 @@ def _build_structured_port(ports_el: ET.Element, port: dict) -> None:
 
     print(
         f"WARNING: port '{port['name']}' has struct/typedef type "
-        f"'{port['type_name']}' — emitted as ipxact:structured with no "
+        f"'{port['type_name']}', emitted as ipxact:structured with no "
         "field breakdown (width/subPorts unknown without elaboration).",
         file=sys.stderr,
     )
@@ -138,7 +138,7 @@ def _build_transactional_port(ports_el: ET.Element, port: dict) -> None:
 
     This only records the port itself. The busInterface that describes its
     real bus VLNV and mode comes entirely from the metadata file's
-    busInterfaces[...].interfacePort — see bus_interfaces.py, which requires
+    busInterfaces[...].interfacePort. See bus_interfaces.py, which requires
     every such port to be described there (no guessing).
     """
     port_el  = _sub(ports_el, "port")

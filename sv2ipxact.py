@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""sv2ipxact.py — Convert a SystemVerilog module header to an IP-XACT 2022 component XML.
+"""sv2ipxact.py: convert a SystemVerilog module header to an IP-XACT 2022 component XML.
 
 Uses pyslang to parse the SystemVerilog file into a SyntaxTree, then reads
-the tree as JSON.  Only the module header is inspected (parameters and ports)
-— no elaboration, no symbol resolution, no package loading needed.  Types,
+the tree as JSON.  Only the module header is inspected (parameters and ports),
+with no elaboration, no symbol resolution, no package loading needed.  Types,
 values, and dimension expressions are taken verbatim from the source text,
 which is exactly what IP-XACT expects.
 
@@ -16,7 +16,7 @@ Usage
         [--define   <SYM> [<SYM> …]]
 
 The --meta file is a small JSON document giving the VLNV vendor/library
-(and optionally version, default "1.0") for the component — the "name"
+(and optionally version, default "1.0") for the component; the "name"
 field of the VLNV always comes from the parsed module name. It can also
 declare bus interfaces, mapping discrete SV ports onto the logical ports
 of a bus abstraction definition:
@@ -35,22 +35,22 @@ of a bus abstraction definition:
     }
 
 The abstraction definition is derived by convention as "<bus-def-name>_rtl"
-at the same vendor/library/version as "bus" — it is not given explicitly.
+at the same vendor/library/version as "bus"; it is not given explicitly.
 Neither the logical names nor the mapped physical port names are validated
 against the abstraction definition here (see the design-description
-resolver steps for that) — but a mapped physical port IS checked to exist
+resolver steps for that), but a mapped physical port IS checked to exist
 on the parsed module.
 
 A physical port value may address a named field of a struct/typedef-typed
 port (see "structured" ports below) using dot notation, e.g.
-"<physical_port_name>.<field_name>" — this emits an ipxact:subPort inside
+"<physical_port_name>.<field_name>". This emits an ipxact:subPort inside
 the portMap's physicalPort. Further dots address nested fields. The field
 name itself is not validated (no elaboration), only that the base port
 exists and is struct/typedef-typed.
 
 Ports whose declared type is a struct, union, or other named/scoped type
 (rather than a builtin vector type) are emitted as ipxact:structured with
-just the type name recorded (ipxact:structPortTypeDefs) — field widths and
+just the type name recorded (ipxact:structPortTypeDefs). Field widths and
 sub-ports are not expanded, since that would require elaboration or
 package loading, which this tool deliberately does not do.
 
@@ -66,7 +66,7 @@ name:
     }
 
 Every `interface`-typed port in the module MUST be referenced by exactly one
-busInterfaces[...].interfacePort — there is no fallback guess for its real
+busInterfaces[...].interfacePort. There is no fallback guess for its real
 bus VLNV or mode, so an undescribed one is a hard error, not a placeholder.
 
 The metadata file can also declare "registerFile": a path (relative to the
@@ -144,7 +144,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     _sub(root, "description",
          f"Auto-generated from {sv_file.name} by sv2ipxact")
 
-    # busInterfaces container — attached to root only if the metadata file
+    # busInterfaces container, attached to root only if the metadata file
     # declares any busInterfaces entries.
     bus_ifaces_el = ET.Element(_tag("busInterfaces"))
 
@@ -198,7 +198,7 @@ def generate_ipxact(sv_file: Path, out_file: Path, vendor: str, library: str,
     out_file.parent.mkdir(parents=True, exist_ok=True)
     raw    = ET.tostring(root, encoding="unicode", xml_declaration=False)
     pretty = minidom.parseString(raw).toprettyxml(indent="  ")
-    # Strip the extra <?xml?> line minidom prepends — we add our own.
+    # Strip the extra <?xml?> line minidom prepends; we add our own.
     body   = "\n".join(l for l in pretty.splitlines() if not l.startswith("<?xml"))
     out_file.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -221,12 +221,13 @@ def _load_meta(meta_file: Path) -> dict:
         library = meta["library"]
     except KeyError as exc:
         sys.exit(f"ERROR: metadata file {meta_file} is missing required field {exc}")
+    register_file = meta.get("registerFile")
     return {
         "vendor":         vendor,
         "library":        library,
         "version":        meta.get("version", "1.0"),
         "bus_interfaces": meta.get("busInterfaces", {}),
-        "register_file":  meta.get("registerFile"),
+        "register_file":  (meta_file.parent / register_file) if register_file else None,
     }
 
 
@@ -250,7 +251,6 @@ def main() -> None:
     if not args.meta.exists():
         sys.exit(f"ERROR: metadata file not found: {args.meta}")
     meta = _load_meta(args.meta)
-    register_file = (args.meta.parent / meta["register_file"]) if meta["register_file"] else None
     generate_ipxact(
         sv_file        = args.input,
         out_file       = args.output,
@@ -259,7 +259,7 @@ def main() -> None:
         version        = meta["version"],
         defines        = args.define,
         bus_interfaces = meta["bus_interfaces"],
-        register_file  = register_file,
+        register_file  = meta["register_file"],
     )
 
 
