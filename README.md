@@ -61,8 +61,10 @@ cd test
 python3 -m venv .venv && .venv/bin/pip install -r python_requirements.txt
 mkdir build && cd build
 cmake ..
-make
+make check
 ```
+
+`make check` builds every example, then validates each generated component against the IEEE 1685-2022 XSD (shipped in `ipxact-2022/schema/1685-2022/`) with `xmllint`.
 
 ## Status
 

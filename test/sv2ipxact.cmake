@@ -1,7 +1,7 @@
 #[[[ @module sv2ipxact
 #]]
 #[[[
-# Provides the following function:
+# Provides the following functions:
 #
 #   sv2ipxact(
 #       SV_FILE     <path/to/module.sv>    # input SystemVerilog file
@@ -12,7 +12,7 @@
 #   )
 #
 # META_FILE is a small JSON file giving the component's VLNV vendor and
-# library (and optionally version, default "1.0") — see sv2ipxact.py's
+# library (and optionally version, default "1.0"); see sv2ipxact.py's
 # docstring for the exact schema. The VLNV "name" always comes from the
 # parsed SV module name, not from this file.
 #
@@ -30,12 +30,33 @@
 # the ALL target so it always runs during a normal build. The variable
 # SV2IPXACT_OUTPUT_FILE is set in the caller's scope to the absolute path of
 # the generated XML file.
+#
+#   sv2ipxact_add_check_target()
+#
+# Call once, after every sv2ipxact() call in the project. Registers a
+# "check" target that builds every sv2ipxact()-generated component and then
+# runs the XSD validation tests, all with a single `make check`. Plain
+# `ctest` alone does not rebuild first, so it can silently validate stale
+# or missing files if you forgot to `make`; `make check` avoids that.
 #]]
 
 set(_SV2IPXACT_DEFAULT_SCRIPT
     "${CMAKE_CURRENT_LIST_DIR}/../sv2ipxact.py"
     CACHE FILEPATH "Default path to sv2ipxact.py"
 )
+
+# Each generated component is also checked against the real IEEE 1685-2022
+# XSD (shipped in ipxact-2022/schema/1685-2022/) via xmllint, registered as
+# a CTest test. Skipped if xmllint isn't installed.
+find_program(XMLLINT_EXECUTABLE xmllint)
+set(_SV2IPXACT_COMPONENT_XSD
+    "${CMAKE_CURRENT_LIST_DIR}/../ipxact-2022/schema/1685-2022/component.xsd")
+
+if(XMLLINT_EXECUTABLE)
+    message(STATUS "[sv2ipxact] XSD validation tests enabled (run via 'ctest')")
+else()
+    message(STATUS "[sv2ipxact] xmllint not found: XSD validation tests disabled")
+endif()
 
 function(sv2ipxact)
     set(options )
@@ -90,7 +111,7 @@ function(sv2ipxact)
     endif()
 
     # Read vendor/library (required) straight out of META_FILE, just for
-    # naming the target and the build comment — sv2ipxact.py re-reads the
+    # naming the target and the build comment; sv2ipxact.py re-reads the
     # same file at build time and remains the single source of truth.
     file(READ "${_meta_abs}" _meta_json)
     string(JSON _vendor  GET "${_meta_json}" "vendor")
@@ -145,6 +166,15 @@ function(sv2ipxact)
     add_custom_target("${_vendor}_${_library}_${_sv_stem}_sv2ipxact" ALL
         DEPENDS "${_xml_output}"
     )
+    set_property(GLOBAL APPEND PROPERTY SV2IPXACT_ALL_TARGETS
+        "${_vendor}_${_library}_${_sv_stem}_sv2ipxact")
+
+    if(XMLLINT_EXECUTABLE)
+        add_test(
+            NAME    "${_vendor}_${_library}_${_sv_stem}_xsd_validate"
+            COMMAND "${XMLLINT_EXECUTABLE}" --noout --schema "${_SV2IPXACT_COMPONENT_XSD}" "${_xml_output}"
+        )
+    endif()
 
     set(SV2IPXACT_OUTPUT_FILE "${_xml_output}" PARENT_SCOPE)
 
@@ -152,5 +182,15 @@ function(sv2ipxact)
         "[sv2ipxact] Registered target "
         "'${_vendor}_${_library}_${_sv_stem}_sv2ipxact': "
         "${_sv_stem}.sv → ${_sv_stem}.xml"
+    )
+endfunction()
+
+function(sv2ipxact_add_check_target)
+    get_property(_all_targets GLOBAL PROPERTY SV2IPXACT_ALL_TARGETS)
+    add_custom_target(check
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+        DEPENDS ${_all_targets}
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "[sv2ipxact] Building all components, then running XSD validation"
     )
 endfunction()

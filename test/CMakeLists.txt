@@ -7,6 +7,8 @@ find_package (Python3 COMPONENTS Interpreter Development)
 
 project(ipxact_test)
 
+enable_testing()
+
 sv2ipxact(
     SV_FILE   "./adder/adder.v"
     META_FILE "./adder/adder.ipxact.json"
@@ -31,3 +33,5 @@ sv2ipxact(
     SV_FILE   "./apb_gpio/apb_gpio_packed.sv"
     META_FILE "./apb_gpio/apb_gpio_packed.ipxact.json"
 )
+
+sv2ipxact_add_check_target()
