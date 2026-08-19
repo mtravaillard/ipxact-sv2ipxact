@@ -1,0 +1,82 @@
+addrmap basic_regs {
+    name = "Basic Registers";
+    desc = "Register map fixture for the upcoming sv2ipxact + peakrdl-ipxact memory-map merge feature.";
+
+    reg {
+        name = "Control register";
+        field {
+            sw = rw; hw = r;
+            desc = "Enables the counter.";
+        } ENABLE[0:0] = 0;
+        field {
+            sw = rw; hw = r;
+            desc = "Software reset, self-clearing.";
+        } RESET[1:1] = 0;
+        field {
+            sw = rw; hw = r;
+            desc = "Counting mode: 0 = free-running, 1 = one-shot.";
+        } MODE[2:2] = 0;
+    } CTRL @ 0x00;
+
+    reg {
+        name = "Status register";
+        field {
+            sw = r; hw = w;
+            desc = "Counter is currently running.";
+        } BUSY[0:0] = 0;
+        field {
+            sw = r; hw = w;
+            desc = "One-shot count reached the threshold.";
+        } DONE[1:1] = 0;
+    } STATUS @ 0x04;
+
+    reg {
+        name = "Interrupt status register";
+        field {
+            sw = rw; hw = w;
+            woclr;
+            hwset;
+            desc = "Threshold reached. Sticky: set by hardware, cleared by writing 1.";
+        } THRESH_HIT[0:0] = 0;
+    } INTR_STATUS @ 0x08;
+
+    reg {
+        name = "Interrupt enable register";
+        field {
+            sw = rw; hw = r;
+            desc = "Enables the threshold-hit interrupt.";
+        } THRESH_HIT_EN[0:0] = 0;
+    } INTR_ENABLE @ 0x0C;
+
+    reg {
+        name = "Count register";
+        field {
+            sw = r; hw = w;
+            desc = "Current count value.";
+        } VALUE[7:0] = 0;
+    } COUNT @ 0x10;
+
+    reg {
+        name = "Threshold register";
+        field {
+            sw = rw; hw = r;
+            desc = "Count value that triggers DONE / THRESH_HIT.";
+        } VALUE[7:0] = 8'hFF;
+    } THRESHOLD @ 0x14;
+
+    reg {
+        name = "Version register";
+        field {
+            sw = r; hw = na;
+            desc = "IP version, fixed at build time.";
+        } VALUE[15:0] = 16'h0100;
+    } VERSION @ 0x18;
+
+    reg {
+        name = "Scratch register";
+        field {
+            sw = rw; hw = r;
+            desc = "General-purpose read/write scratch space.";
+        } VALUE[31:0] = 0;
+    } SCRATCH @ 0x1C;
+};

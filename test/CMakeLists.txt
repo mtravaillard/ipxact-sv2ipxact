@@ -34,4 +34,9 @@ sv2ipxact(
     META_FILE "./apb_gpio/apb_gpio_packed_ipxact.json"
 )
 
+sv2ipxact(
+    SV_FILE   "./basic_regs/basic_regs.sv"
+    META_FILE "./basic_regs/basic_regs_ipxact.json"
+)
+
 sv2ipxact_add_check_target()
