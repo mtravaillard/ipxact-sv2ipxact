@@ -12,164 +12,216 @@
 /**
  * Top level module of the ibex RISC-V core
  */
-module ibex_top #(
-  parameter bit          PMPEnable        = 1'b0,
-  parameter int unsigned PMPGranularity   = 0,
-  parameter int unsigned PMPNumRegions    = 4,
-  parameter int unsigned MHPMCounterNum   = 0,
-  parameter int unsigned MHPMCounterWidth = 40,
-  parameter bit          RV32E            = 1'b0,
-  parameter rv32m_e      RV32M            = RV32MFast,
-  parameter rv32b_e      RV32B            = RV32BNone,
-  parameter regfile_e    RegFile          = RegFileFF,
-  parameter bit          BranchTargetALU  = 1'b0,
-  parameter bit          WritebackStage   = 1'b0,
-  parameter bit          ICache           = 1'b0,
-  parameter bit          ICacheECC        = 1'b0,
-  parameter bit          BranchPredictor  = 1'b0,
-  parameter bit          DbgTriggerEn     = 1'b0,
-  parameter int unsigned DbgHwBreakNum    = 1,
-  parameter bit          SecureIbex       = 1'b0,
-  parameter bit          ICacheScramble   = 1'b0,
-  parameter lfsr_seed_t  RndCnstLfsrSeed  = RndCnstLfsrSeedDefault,
-  parameter lfsr_perm_t  RndCnstLfsrPerm  = RndCnstLfsrPermDefault,
-  parameter int unsigned DmHaltAddr       = 32'h1A110800,
-  parameter int unsigned DmExceptionAddr  = 32'h1A110808,
+module ibex_top import ibex_pkg::*; #(
+  parameter ibex_pkg::base_isa_e    BaseIsa                      = ibex_pkg::BaseIsaRV32I,
+  parameter bit                     PMPEnable                    = 1'b0,
+  parameter int unsigned            PMPGranularity               = 0,
+  parameter int unsigned            PMPNumRegions                = 4,
+  parameter int unsigned            MHPMCounterNum               = 0,
+  parameter int unsigned            MHPMCounterWidth             = 40,
+  parameter ibex_pkg::pmp_cfg_t     PMPRstCfg[PMP_MAX_REGIONS]   = ibex_pkg::PmpCfgRst,
+  parameter logic [PMP_ADDR_MSB:0]  PMPRstAddr[PMP_MAX_REGIONS]  = ibex_pkg::PmpAddrRst,
+  parameter ibex_pkg::pmp_mseccfg_t PMPRstMsecCfg                = ibex_pkg::PmpMseccfgRst,
+  parameter int unsigned            CheriotRevBitmapAddrWidth    = 32'd11,
+  parameter int unsigned            CheriotRevBitmapBaseAddr     = 32'h0,
+  parameter bit                     RV32E                        = 1'b0,
+  parameter rv32m_e                 RV32M                        = RV32MFast,
+  parameter rv32b_e                 RV32B                        = RV32BNone,
+  parameter rv32zc_e                RV32ZC                       = RV32ZcaZcbZcmp,
+  parameter regfile_e               RegFile                      = RegFileFF,
+  parameter bit                     BranchTargetALU              = 1'b0,
+  parameter bit                     WritebackStage               = 1'b0,
+  parameter bit                     ICache                       = 1'b0,
+  parameter bit                     ICacheECC                    = 1'b0,
+  parameter bit                     BranchPredictor              = 1'b0,
+  parameter bit                     DbgTriggerEn                 = 1'b0,
+  parameter int unsigned            DbgHwBreakNum                = 1,
+  parameter bit                     SecureIbex                   = 1'b0,
+  parameter int unsigned            LockstepOffset               = 1,
+  parameter bit                     MemECC                       = SecureIbex,
+  parameter int unsigned            MemDataWidth                 = MemECC ? 32 + 7 : 32,
+  parameter bit                     ICacheScramble               = 1'b0,
+  parameter int unsigned            ICacheScrNumPrinceRoundsHalf = 2,
+  parameter bit                     ICacheTweakInfection         = SecureIbex,
+  parameter lfsr_seed_t             RndCnstLfsrSeed              = RndCnstLfsrSeedDefault,
+  parameter lfsr_perm_t             RndCnstLfsrPerm              = RndCnstLfsrPermDefault,
+  parameter int unsigned            DmBaseAddr                   = 32'h1A110000,
+  parameter int unsigned            DmAddrMask                   = 32'h00000FFF,
+  parameter int unsigned            DmHaltAddr                   = 32'h1A110800,
+  parameter int unsigned            DmExceptionAddr              = 32'h1A110808,
   // Default seed and nonce for scrambling
-  parameter logic [SCRAMBLE_KEY_W-1:0]   RndCnstIbexKey   = RndCnstIbexKeyDefault,
-  parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonce = RndCnstIbexNonceDefault
+  parameter logic [SCRAMBLE_KEY_W-1:0]   RndCnstIbexKey          = RndCnstIbexKeyDefault,
+  parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonce        = RndCnstIbexNonceDefault,
+  // mvendorid: encoding of manufacturer/provider
+  // 0 indicates this field is not implemented. Ibex implementers may wish to set their
+  // own JEDEC ID here.
+  parameter logic [31:0]            CsrMvendorId                 = 32'b0,
+  // mimpid: encoding of processor implementation version
+  // 0 indicates this field is not implemented. Ibex implementers may wish to indicate an
+  // RTL/netlist version here using their own unique encoding (e.g. 32 bits of the git hash of the
+  // implemented commit).
+  parameter logic [31:0]            CsrMimpId                    = 32'b0
 ) (
   // Clock and Reset
-  input  logic                         clk_i,
-  input  logic                         rst_ni,
+  input  logic                                                         clk_i,
+  input  logic                                                         rst_ni,
 
-  input  logic                         test_en_i,     // enable all clock gates for testing
-  input  prim_ram_1p_pkg::ram_1p_cfg_t ram_cfg_i,
+  // enable all clock gates for testing
+  input  logic                                                         test_en_i,
+  input  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0] ram_cfg_icache_tag_i,
+  output prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0] ram_cfg_icache_tag_o,
+  input  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0] ram_cfg_icache_data_i,
+  output prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0] ram_cfg_icache_data_o,
 
-  input  logic [31:0]                  hart_id_i,
-  input  logic [31:0]                  boot_addr_i,
+  input  logic [31:0]                                                  hart_id_i,
+  input  logic [31:0]                                                  boot_addr_i,
+
+  input  logic [31:0]                                                  trvk_heap_base_addr_i,
 
   // Instruction memory interface
-  output logic                         instr_req_o,
-  input  logic                         instr_gnt_i,
-  input  logic                         instr_rvalid_i,
-  output logic [31:0]                  instr_addr_o,
-  input  logic [31:0]                  instr_rdata_i,
-  input  logic [6:0]                   instr_rdata_intg_i,
-  input  logic                         instr_err_i,
+  output logic                                                         instr_req_o,
+  input  logic                                                         instr_gnt_i,
+  input  logic                                                         instr_rvalid_i,
+  output logic [31:0]                                                  instr_addr_o,
+  input  logic [31:0]                                                  instr_rdata_i,
+  input  logic [6:0]                                                   instr_rdata_intg_i,
+  input  logic                                                         instr_err_i,
 
   // Data memory interface
-  output logic                         data_req_o,
-  input  logic                         data_gnt_i,
-  input  logic                         data_rvalid_i,
-  output logic                         data_we_o,
-  output logic [3:0]                   data_be_o,
-  output logic [31:0]                  data_addr_o,
-  output logic [31:0]                  data_wdata_o,
-  output logic [6:0]                   data_wdata_intg_o,
-  input  logic [31:0]                  data_rdata_i,
-  input  logic [6:0]                   data_rdata_intg_i,
-  input  logic                         data_err_i,
+  output logic                                                         data_req_o,
+  input  logic                                                         data_gnt_i,
+  input  logic                                                         data_rvalid_i,
+  output logic                                                         data_we_o,
+  output logic [3:0]                                                   data_be_o,
+  output logic [31:0]                                                  data_addr_o,
+  output logic [31:0]                                                  data_wdata_o,
+  output logic [6:0]                                                   data_wdata_intg_o,
+  output logic                                                         data_tag_o,
+  input  logic [31:0]                                                  data_rdata_i,
+  input  logic [6:0]                                                   data_rdata_intg_i,
+  input  logic                                                         data_tag_i,
+  input  logic                                                         data_err_i,
+
+  // TRVK revocation bitmap read interface
+  output logic                                                         trvk_revbm_req_o,
+  input  logic                                                         trvk_revbm_gnt_i,
+  input  logic                                                         trvk_revbm_rvalid_i,
+  output logic [31:0]                                                  trvk_revbm_addr_o,
+  input  logic [31:0]                                                  trvk_revbm_rdata_i,
+  input  logic [6:0]                                                   trvk_revbm_rdata_intg_i,
+  input  logic                                                         trvk_revbm_err_i,
 
   // Interrupt inputs
-  input  logic                         irq_software_i,
-  input  logic                         irq_timer_i,
-  input  logic                         irq_external_i,
-  input  logic [14:0]                  irq_fast_i,
-  input  logic                         irq_nm_i,       // non-maskeable interrupt
+  input  logic                                                         irq_software_i,
+  input  logic                                                         irq_timer_i,
+  input  logic                                                         irq_external_i,
+  input  logic [14:0]                                                  irq_fast_i,
+  // non-maskeable interrupt
+  input  logic                                                         irq_nm_i,
 
   // Scrambling Interface
-  input  logic                         scramble_key_valid_i,
-  input  logic [SCRAMBLE_KEY_W-1:0]    scramble_key_i,
-  input  logic [SCRAMBLE_NONCE_W-1:0]  scramble_nonce_i,
-  output logic                         scramble_req_o,
+  input  logic                                                         scramble_key_valid_i,
+  input  logic [SCRAMBLE_KEY_W-1:0]                                    scramble_key_i,
+  input  logic [SCRAMBLE_NONCE_W-1:0]                                  scramble_nonce_i,
+  output logic                                                         scramble_req_o,
 
   // Debug Interface
-  input  logic                         debug_req_i,
-  output crash_dump_t                  crash_dump_o,
-  output logic                         double_fault_seen_o,
+  input  logic                                                         debug_req_i,
+  output crash_dump_t                                                  crash_dump_o,
+  output logic                                                         double_fault_seen_o,
 
   // RISC-V Formal Interface
   // Does not comply with the coding standards of _i/_o suffixes, but follows
   // the convention of RISC-V Formal Interface Specification.
-// tmrg translate off
 `ifdef RVFI
-  output logic                         rvfi_valid,
-  output logic [63:0]                  rvfi_order,
-  output logic [31:0]                  rvfi_insn,
-  output logic                         rvfi_trap,
-  output logic                         rvfi_halt,
-  output logic                         rvfi_intr,
-  output logic [ 1:0]                  rvfi_mode,
-  output logic [ 1:0]                  rvfi_ixl,
-  output logic [ 4:0]                  rvfi_rs1_addr,
-  output logic [ 4:0]                  rvfi_rs2_addr,
-  output logic [ 4:0]                  rvfi_rs3_addr,
-  output logic [31:0]                  rvfi_rs1_rdata,
-  output logic [31:0]                  rvfi_rs2_rdata,
-  output logic [31:0]                  rvfi_rs3_rdata,
-  output logic [ 4:0]                  rvfi_rd_addr,
-  output logic [31:0]                  rvfi_rd_wdata,
-  output logic [31:0]                  rvfi_pc_rdata,
-  output logic [31:0]                  rvfi_pc_wdata,
-  output logic [31:0]                  rvfi_mem_addr,
-  output logic [ 3:0]                  rvfi_mem_rmask,
-  output logic [ 3:0]                  rvfi_mem_wmask,
-  output logic [31:0]                  rvfi_mem_rdata,
-  output logic [31:0]                  rvfi_mem_wdata,
-  output logic [31:0]                  rvfi_ext_mip,
-  output logic                         rvfi_ext_nmi,
-  output logic                         rvfi_ext_nmi_int,
-  output logic                         rvfi_ext_debug_req,
-  output logic                         rvfi_ext_debug_mode,
-  output logic                         rvfi_ext_rf_wr_suppress,
-  output logic [63:0]                  rvfi_ext_mcycle,
-  output logic [31:0]                  rvfi_ext_mhpmcounters [10],
-  output logic [31:0]                  rvfi_ext_mhpmcountersh [10],
-  output logic                         rvfi_ext_ic_scr_key_valid,
-  output logic                         rvfi_ext_irq_valid,
+  output logic                                                        rvfi_valid,
+  output logic [63:0]                                                 rvfi_order,
+  output logic [31:0]                                                 rvfi_insn,
+  output logic                                                        rvfi_trap,
+  output logic                                                        rvfi_halt,
+  output logic                                                        rvfi_intr,
+  output logic [ 1:0]                                                 rvfi_mode,
+  output logic [ 1:0]                                                 rvfi_ixl,
+  output logic [ 4:0]                                                 rvfi_rs1_addr,
+  output logic [ 4:0]                                                 rvfi_rs2_addr,
+  output logic [ 4:0]                                                 rvfi_rs3_addr,
+  output logic [31:0]                                                 rvfi_rs1_rdata,
+  output logic [31:0]                                                 rvfi_rs2_rdata,
+  output logic [31:0]                                                 rvfi_rs3_rdata,
+  output logic [ 4:0]                                                 rvfi_rd_addr,
+  output logic [31:0]                                                 rvfi_rd_wdata,
+  output logic [31:0]                                                 rvfi_pc_rdata,
+  output logic [31:0]                                                 rvfi_pc_wdata,
+  output logic [31:0]                                                 rvfi_mem_addr,
+  output logic [ 3:0]                                                 rvfi_mem_rmask,
+  output logic [ 3:0]                                                 rvfi_mem_wmask,
+  output logic [31:0]                                                 rvfi_mem_rdata,
+  output logic [31:0]                                                 rvfi_mem_wdata,
+  output logic [31:0]                                                 rvfi_ext_pre_mip,
+  output logic [31:0]                                                 rvfi_ext_post_mip,
+  output logic                                                        rvfi_ext_nmi,
+  output logic                                                        rvfi_ext_nmi_int,
+  output logic                                                        rvfi_ext_debug_req,
+  output logic                                                        rvfi_ext_debug_mode,
+  output logic                                                        rvfi_ext_rf_wr_suppress,
+  output logic [63:0]                                                 rvfi_ext_mcycle,
+  output logic [31:0]                                                 rvfi_ext_mhpmcounters [10],
+  output logic [31:0]                                                 rvfi_ext_mhpmcountersh [10],
+  output logic                                                        rvfi_ext_ic_scr_key_valid,
+  output logic                                                        rvfi_ext_irq_valid,
+  output logic                                                        rvfi_ext_expanded_insn_valid,
+  output logic [15:0]                                                 rvfi_ext_expanded_insn,
+  output logic                                                        rvfi_ext_expanded_insn_last,
 `endif
-// tmrg translate on
-
-  // seu_signals_t are tmrerr signals of various blocks
-  output seu_signals_t                 seu_o,
 
   // CPU Control Signals
-  input  ibex_mubi_t                   fetch_enable_i,
-  output logic                         alert_minor_o,
-  output logic                         alert_major_internal_o,
-  output logic                         alert_major_bus_o,
-  output logic                         core_sleep_o,
+  input  ibex_mubi_t                                                  fetch_enable_i,
+  input  ibex_mubi_t                                                  mcounteren_writable_i,
+  output logic                                                        alert_minor_o,
+  output logic                                                        alert_major_internal_o,
+  output logic                                                        alert_major_bus_o,
+  output logic                                                        core_sleep_o,
 
   // DFT bypass controls
-  input logic                          scan_rst_ni
+  input logic                                                         scan_rst_ni,
 
+  // Lockstep signals
+  output ibex_mubi_t                                                  lockstep_cmp_en_o,
+
+  // Shadow core data interface outputs
+  output logic                                                        data_req_shadow_o,
+  output logic                                                        data_we_shadow_o,
+  output logic [3:0]                                                  data_be_shadow_o,
+  output logic [31:0]                                                 data_addr_shadow_o,
+  output logic [31:0]                                                 data_wdata_shadow_o,
+  output logic [6:0]                                                  data_wdata_intg_shadow_o,
+
+  // Shadow core instruction interface outputs
+  output logic                                                        instr_req_shadow_o,
+  output logic [31:0]                                                 instr_addr_shadow_o
 );
-
-`ifndef TMRG
-  assign seu_o.rf_seu = 1'b0;
-`else
-  // tmr error signals propagation
-  wire register_file_itmrError = 1'b0;
-  // the remaining signals are connected at the module port instantiation
-  assign seu_o.rf_seu = register_file_itmrError;
-`endif
 
   localparam bit          Lockstep              = SecureIbex;
   localparam bit          ResetAll              = Lockstep;
   localparam bit          DummyInstructions     = SecureIbex;
-  localparam bit          RegFileECC            = SecureIbex;
-  localparam bit          RegFileWrenCheck      = SecureIbex;
-  localparam bit          RegFileRdataMuxCheck  = SecureIbex;
-  localparam int unsigned RegFileDataWidth      = RegFileECC ? 32 + 7 : 32;
-  localparam bit          MemECC                = SecureIbex;
-  localparam int unsigned MemDataWidth          = MemECC ? 32 + 7 : 32;
+  localparam bit          RegFileECC            = 0;
+  localparam bit          RegFileLockstepECC    = Lockstep;
+  localparam int unsigned RegFileDataWidth      = 32;
+  localparam int unsigned RegFileDataEccWidth   = 32 + 7;
   // Icache parameters
-  localparam int unsigned BusSizeECC        = ICacheECC ? (BUS_SIZE + 7) : BUS_SIZE;
+  localparam int unsigned BusSizeECC        = ICacheECC ? (BUS_SIZE + IC_DATA_ECC_SIZE) :
+                                                           BUS_SIZE;
   localparam int unsigned LineSizeECC       = BusSizeECC * IC_LINE_BEATS;
-  localparam int unsigned TagSizeECC        = ICacheECC ? (IC_TAG_SIZE + 6) : IC_TAG_SIZE;
+  localparam int unsigned TagSizeECC        = ICacheECC ? (IC_TAG_SIZE + IC_TAG_ECC_SIZE) :
+                                                           IC_TAG_SIZE;
   // Scrambling Parameter
   localparam int unsigned NumAddrScrRounds  = ICacheScramble ? 2 : 0;
+
+  // Ibex can have a maximum of 2 accesses outstanding on the DSide. This is because it does not
+  // speculative data accesses so the only requests that can be in flight must relate to a single
+  // ongoing load or store instruction. Due to unaligned access support a single load or store can
+  // generate 2 accesses.
+  localparam int unsigned MaxOutstandingDSideAccesses = 2;
 
   // Clock signals
   logic                        clk;
@@ -183,14 +235,31 @@ module ibex_top #(
   logic [4:0]                  rf_raddr_b;
   logic [4:0]                  rf_waddr_wb;
   logic                        rf_we_wb;
-  logic [RegFileDataWidth-1:0] rf_wdata_wb_ecc;
-  logic [RegFileDataWidth-1:0] rf_rdata_a_ecc, rf_rdata_a_ecc_buf;
-  logic [RegFileDataWidth-1:0] rf_rdata_b_ecc, rf_rdata_b_ecc_buf;
+  logic [RegFileDataWidth-1:0] rf_wdata_wb;
+  logic [RegFileDataWidth-1:0] rf_rdata_a;
+  logic [RegFileDataWidth-1:0] rf_rdata_b;
 
   // Combined data and integrity for data and instruction busses
   logic [MemDataWidth-1:0]     data_wdata_core;
   logic [MemDataWidth-1:0]     data_rdata_core;
   logic [MemDataWidth-1:0]     instr_rdata_core;
+
+  // Core <-> TRVK connection
+  logic        trvk_req;
+  logic        trvk_gnt;
+  logic        trvk_rvalid;
+  logic        trvk_we;
+  logic [3:0]  trvk_be;
+  logic [31:0] trvk_addr;
+  logic [31:0] trvk_wdata;
+  logic [6:0]  trvk_wdata_intg;
+  logic        trvk_wtag;
+  logic [31:0] trvk_rdata;
+  logic [6:0]  trvk_rdata_intg;
+  logic        trvk_rtag;
+  logic        trvk_err;
+  logic        trvk_revbm_data_intg_error;
+  logic        trvk_revbm_device_error;
 
   // Core <-> RAMs signals
   logic [IC_NUM_WAYS-1:0]      ic_tag_req;
@@ -215,14 +284,12 @@ module ibex_top #(
   logic                        scramble_req_d, scramble_req_q;
 
   ibex_mubi_t                  fetch_enable_buf;
+  ibex_mubi_t                  mcounteren_writable_buf;
 
-  // voted signals
-  wire ibex_mubi_t core_busy_qVoted;
-  assign core_busy_qVoted = core_busy_q;
   /////////////////////
   // Main clock gate //
   /////////////////////
-  // tmrg translate off
+
   if (SecureIbex) begin : g_clock_en_secure
     // For secure Ibex core_busy_q must be a specific multi-bit pattern to enable the clock.
     prim_flop #(
@@ -236,7 +303,6 @@ module ibex_top #(
     );
     assign clock_en = (core_busy_q != IbexMuBiOff) | debug_req_i | irq_pending | irq_nm_i;
   end else begin : g_clock_en_non_secure
-  // tmrg translate on
     // For non secure Ibex only the bottom bit of core_busy_q is considered. Other FFs can be
     // optimized away during synthesis.
     always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -246,24 +312,20 @@ module ibex_top #(
         core_busy_q <= core_busy_d;
       end
     end
-    assign clock_en = core_busy_qVoted[0] | debug_req_i | irq_pending | irq_nm_i;
+    assign clock_en = core_busy_q[0] | debug_req_i | irq_pending | irq_nm_i;
 
     logic unused_core_busy;
-    assign unused_core_busy = ^core_busy_qVoted[$bits(ibex_mubi_t)-1:1];
-  // tmrg translate off
+    assign unused_core_busy = ^core_busy_q[$bits(ibex_mubi_t)-1:1];
   end
-  // tmrg translate on
 
   assign core_sleep_o = ~clock_en;
 
-  // No clock-gating for now for TMR core
-  // prim_clock_gating core_clock_gate_i (
-  //   .clk_i    (clk_i),
-  //   .en_i     (clock_en),
-  //   .test_en_i(test_en_i),
-  //   .clk_o    (clk)
-  // );
-  assign clk = clk_i;
+  prim_clock_gating core_clock_gate_i (
+    .clk_i    (clk_i),
+    .en_i     (clock_en),
+    .test_en_i(test_en_i),
+    .clk_o    (clk)
+  );
 
   ////////////////////////
   // Core instantiation //
@@ -275,88 +337,87 @@ module ibex_top #(
     .out_o(fetch_enable_buf)
   );
 
-  prim_buf #(.Width(RegFileDataWidth)) u_rf_rdata_a_ecc_buf (
-    .in_i (rf_rdata_a_ecc),
-    .out_o(rf_rdata_a_ecc_buf)
+  prim_buf #(.Width($bits(ibex_mubi_t))) u_mcounteren_writable_buf (
+    .in_i (mcounteren_writable_i),
+    .out_o(mcounteren_writable_buf)
   );
-
-  prim_buf #(.Width(RegFileDataWidth)) u_rf_rdata_b_ecc_buf (
-    .in_i (rf_rdata_b_ecc),
-    .out_o(rf_rdata_b_ecc_buf)
-  );
-
 
   // ibex_core takes integrity and data bits together. Combine the separate integrity and data
   // inputs here.
-  assign data_rdata_core[31:0] = data_rdata_i;
+  assign data_rdata_core[31:0] = trvk_rdata;
   assign instr_rdata_core[31:0] = instr_rdata_i;
 
-  // tmrg translate off
   if (MemECC) begin : gen_mem_rdata_ecc
-    assign data_rdata_core[38:32] = data_rdata_intg_i;
+    assign data_rdata_core[38:32] = trvk_rdata_intg;
     assign instr_rdata_core[38:32] = instr_rdata_intg_i;
   end else begin : gen_non_mem_rdata_ecc
-  // tmrg translate on
     logic unused_intg;
 
-    assign unused_intg = ^{instr_rdata_intg_i, data_rdata_intg_i};
-  // tmrg translate off
+    assign unused_intg = ^{instr_rdata_intg_i, trvk_rdata_intg};
   end
-  // tmrg translate on
 
   ibex_core #(
-    .PMPEnable        (PMPEnable),
-    .PMPGranularity   (PMPGranularity),
-    .PMPNumRegions    (PMPNumRegions),
-    .MHPMCounterNum   (MHPMCounterNum),
-    .MHPMCounterWidth (MHPMCounterWidth),
-    .RV32E            (RV32E),
-    .RV32M            (RV32M),
-    .RV32B            (RV32B),
-    .BranchTargetALU  (BranchTargetALU),
-    .ICache           (ICache),
-    .ICacheECC        (ICacheECC),
-    .BusSizeECC       (BusSizeECC),
-    .TagSizeECC       (TagSizeECC),
-    .LineSizeECC      (LineSizeECC),
-    .BranchPredictor  (BranchPredictor),
-    .DbgTriggerEn     (DbgTriggerEn),
-    .DbgHwBreakNum    (DbgHwBreakNum),
-    .WritebackStage   (WritebackStage),
-    .ResetAll         (ResetAll),
-    .RndCnstLfsrSeed  (RndCnstLfsrSeed),
-    .RndCnstLfsrPerm  (RndCnstLfsrPerm),
-    .SecureIbex       (SecureIbex),
-    .DummyInstructions(DummyInstructions),
-    .RegFileECC       (RegFileECC),
-    .RegFileDataWidth (RegFileDataWidth),
-    .MemECC           (MemECC),
-    .MemDataWidth     (MemDataWidth),
-    .DmHaltAddr       (DmHaltAddr),
-    .DmExceptionAddr  (DmExceptionAddr)
+    .PMPEnable            (PMPEnable),
+    .PMPGranularity       (PMPGranularity),
+    .PMPNumRegions        (PMPNumRegions),
+    .PMPRstCfg            (PMPRstCfg),
+    .PMPRstAddr           (PMPRstAddr),
+    .PMPRstMsecCfg        (PMPRstMsecCfg),
+    .MHPMCounterNum       (MHPMCounterNum),
+    .MHPMCounterWidth     (MHPMCounterWidth),
+    .RV32E                (RV32E),
+    .RV32M                (RV32M),
+    .RV32B                (RV32B),
+    .RV32ZC               (RV32ZC),
+    .BranchTargetALU      (BranchTargetALU),
+    .ICache               (ICache),
+    .ICacheECC            (ICacheECC),
+    .ICacheTweakInfection (ICacheTweakInfection),
+    .BusSizeECC           (BusSizeECC),
+    .TagSizeECC           (TagSizeECC),
+    .LineSizeECC          (LineSizeECC),
+    .BranchPredictor      (BranchPredictor),
+    .DbgTriggerEn         (DbgTriggerEn),
+    .DbgHwBreakNum        (DbgHwBreakNum),
+    .WritebackStage       (WritebackStage),
+    .ResetAll             (ResetAll),
+    .RndCnstLfsrSeed      (RndCnstLfsrSeed),
+    .RndCnstLfsrPerm      (RndCnstLfsrPerm),
+    .SecureIbex           (SecureIbex),
+    .DummyInstructions    (DummyInstructions),
+    .RegFileECC           (RegFileECC),
+    .RegFileDataWidth     (RegFileDataWidth),
+    .MemECC               (MemECC),
+    .MemDataWidth         (MemDataWidth),
+    .DmBaseAddr           (DmBaseAddr),
+    .DmAddrMask           (DmAddrMask),
+    .DmHaltAddr           (DmHaltAddr),
+    .DmExceptionAddr      (DmExceptionAddr),
+    .CsrMvendorId         (CsrMvendorId),
+    .CsrMimpId            (CsrMimpId)
   ) u_ibex_core (
     .clk_i(clk),
-    .rst_ni(rst_ni),
+    .rst_ni,
 
-    .hart_id_i(hart_id_i),
-    .boot_addr_i(boot_addr_i),
+    .hart_id_i,
+    .boot_addr_i,
 
-    .instr_req_o(instr_req_o),
-    .instr_gnt_i(instr_gnt_i),
-    .instr_rvalid_i(instr_rvalid_i),
-    .instr_addr_o(instr_addr_o),
+    .instr_req_o,
+    .instr_gnt_i,
+    .instr_rvalid_i,
+    .instr_addr_o,
     .instr_rdata_i(instr_rdata_core),
-    .instr_err_i(instr_err_i),
+    .instr_err_i,
 
-    .data_req_o(data_req_o),
-    .data_gnt_i(data_gnt_i),
-    .data_rvalid_i(data_rvalid_i),
-    .data_we_o(data_we_o),
-    .data_be_o(data_be_o),
-    .data_addr_o(data_addr_o),
-    .data_wdata_o(data_wdata_core),
-    .data_rdata_i(data_rdata_core),
-    .data_err_i(data_err_i),
+    .data_req_o   (trvk_req),
+    .data_gnt_i   (trvk_gnt),
+    .data_rvalid_i(trvk_rvalid),
+    .data_we_o    (trvk_we),
+    .data_be_o    (trvk_be),
+    .data_addr_o  (trvk_addr),
+    .data_wdata_o (data_wdata_core),
+    .data_rdata_i (data_rdata_core),
+    .data_err_i   (trvk_err),
 
     .dummy_instr_id_o (dummy_instr_id),
     .dummy_instr_wb_o (dummy_instr_wb),
@@ -364,9 +425,9 @@ module ibex_top #(
     .rf_raddr_b_o     (rf_raddr_b),
     .rf_waddr_wb_o    (rf_waddr_wb),
     .rf_we_wb_o       (rf_we_wb),
-    .rf_wdata_wb_ecc_o(rf_wdata_wb_ecc),
-    .rf_rdata_a_ecc_i (rf_rdata_a_ecc_buf),
-    .rf_rdata_b_ecc_i (rf_rdata_b_ecc_buf),
+    .rf_wdata_wb_ecc_o(rf_wdata_wb),
+    .rf_rdata_a_ecc_i (rf_rdata_a),
+    .rf_rdata_b_ecc_i (rf_rdata_b),
 
     .ic_tag_req_o      (ic_tag_req),
     .ic_tag_write_o    (ic_tag_write),
@@ -381,18 +442,17 @@ module ibex_top #(
     .ic_scr_key_valid_i(scramble_key_valid_q),
     .ic_scr_key_req_o  (ic_scr_key_req),
 
-    .irq_software_i(irq_software_i),
-    .irq_timer_i(irq_timer_i),
-    .irq_external_i(irq_external_i),
-    .irq_fast_i(irq_fast_i),
-    .irq_nm_i(irq_nm_i),
+    .irq_software_i,
+    .irq_timer_i,
+    .irq_external_i,
+    .irq_fast_i,
+    .irq_nm_i,
     .irq_pending_o(irq_pending),
 
-    .debug_req_i(debug_req_i),
-    .crash_dump_o(crash_dump_o),
-    .double_fault_seen_o(double_fault_seen_o),
+    .debug_req_i,
+    .crash_dump_o,
+    .double_fault_seen_o,
 
-// tmrg translate off
 `ifdef RVFI
     .rvfi_valid,
     .rvfi_order,
@@ -417,7 +477,8 @@ module ibex_top #(
     .rvfi_mem_wmask,
     .rvfi_mem_rdata,
     .rvfi_mem_wdata,
-    .rvfi_ext_mip,
+    .rvfi_ext_pre_mip,
+    .rvfi_ext_post_mip,
     .rvfi_ext_nmi,
     .rvfi_ext_nmi_int,
     .rvfi_ext_debug_req,
@@ -428,16 +489,13 @@ module ibex_top #(
     .rvfi_ext_mhpmcountersh,
     .rvfi_ext_ic_scr_key_valid,
     .rvfi_ext_irq_valid,
+    .rvfi_ext_expanded_insn_valid,
+    .rvfi_ext_expanded_insn,
+    .rvfi_ext_expanded_insn_last,
 `endif
-// tmrg translate on
-
-    .if_seu_o (seu_o.if_seu),
-    .id_seu_o (seu_o.id_seu),
-    .ex_seu_o (seu_o.ex_seu),
-    .lsu_seu_o(seu_o.lsu_seu),
-    .csr_seu_o(seu_o.csr_seu),
 
     .fetch_enable_i        (fetch_enable_buf),
+    .mcounteren_writable_i (mcounteren_writable_buf),
     .alert_minor_o         (core_alert_minor),
     .alert_major_internal_o(core_alert_major_internal),
     .alert_major_bus_o     (core_alert_major_bus),
@@ -448,17 +506,11 @@ module ibex_top #(
   // Register file Instantiation //
   /////////////////////////////////
 
-  logic rf_alert_major_internal;
-  // tmrg translate off
   if (RegFile == RegFileFF) begin : gen_regfile_ff
-  // tmrg translate on
     ibex_register_file_ff #(
       .RV32E            (RV32E),
       .DataWidth        (RegFileDataWidth),
       .DummyInstructions(DummyInstructions),
-      // SEC_CM: DATA_REG_SW.GLITCH_DETECT
-      .WrenCheck        (RegFileWrenCheck),
-      .RdataMuxCheck    (RegFileRdataMuxCheck),
       .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord))
     ) register_file_i (
       .clk_i (clk),
@@ -469,23 +521,18 @@ module ibex_top #(
       .dummy_instr_wb_i(dummy_instr_wb),
 
       .raddr_a_i(rf_raddr_a),
-      .rdata_a_o(rf_rdata_a_ecc),
+      .rdata_a_o(rf_rdata_a),
       .raddr_b_i(rf_raddr_b),
-      .rdata_b_o(rf_rdata_b_ecc),
+      .rdata_b_o(rf_rdata_b),
       .waddr_a_i(rf_waddr_wb),
-      .wdata_a_i(rf_wdata_wb_ecc),
-      .we_a_i   (rf_we_wb),
-      .err_o    (rf_alert_major_internal)
+      .wdata_a_i(rf_wdata_wb),
+      .we_a_i   (rf_we_wb)
     );
-  // tmrg translate off
   end else if (RegFile == RegFileFPGA) begin : gen_regfile_fpga
     ibex_register_file_fpga #(
       .RV32E            (RV32E),
       .DataWidth        (RegFileDataWidth),
       .DummyInstructions(DummyInstructions),
-      // SEC_CM: DATA_REG_SW.GLITCH_DETECT
-      .WrenCheck        (RegFileWrenCheck),
-      .RdataMuxCheck    (RegFileRdataMuxCheck),
       .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord))
     ) register_file_i (
       .clk_i (clk),
@@ -496,22 +543,18 @@ module ibex_top #(
       .dummy_instr_wb_i(dummy_instr_wb),
 
       .raddr_a_i(rf_raddr_a),
-      .rdata_a_o(rf_rdata_a_ecc),
+      .rdata_a_o(rf_rdata_a),
       .raddr_b_i(rf_raddr_b),
-      .rdata_b_o(rf_rdata_b_ecc),
+      .rdata_b_o(rf_rdata_b),
       .waddr_a_i(rf_waddr_wb),
-      .wdata_a_i(rf_wdata_wb_ecc),
-      .we_a_i   (rf_we_wb),
-      .err_o    (rf_alert_major_internal)
+      .wdata_a_i(rf_wdata_wb),
+      .we_a_i   (rf_we_wb)
     );
   end else if (RegFile == RegFileLatch) begin : gen_regfile_latch
     ibex_register_file_latch #(
       .RV32E            (RV32E),
       .DataWidth        (RegFileDataWidth),
       .DummyInstructions(DummyInstructions),
-      // SEC_CM: DATA_REG_SW.GLITCH_DETECT
-      .WrenCheck        (RegFileWrenCheck),
-      .RdataMuxCheck    (RegFileRdataMuxCheck),
       .WordZeroVal      (RegFileDataWidth'(prim_secded_pkg::SecdedInv3932ZeroWord))
     ) register_file_i (
       .clk_i (clk),
@@ -520,22 +563,21 @@ module ibex_top #(
       .test_en_i       (test_en_i),
       .dummy_instr_id_i(dummy_instr_id),
       .dummy_instr_wb_i(dummy_instr_wb),
+
       .raddr_a_i(rf_raddr_a),
-      .rdata_a_o(rf_rdata_a_ecc),
+      .rdata_a_o(rf_rdata_a),
       .raddr_b_i(rf_raddr_b),
-      .rdata_b_o(rf_rdata_b_ecc),
+      .rdata_b_o(rf_rdata_b),
       .waddr_a_i(rf_waddr_wb),
-      .wdata_a_i(rf_wdata_wb_ecc),
-      .we_a_i   (rf_we_wb),
-      .err_o    (rf_alert_major_internal)
+      .wdata_a_i(rf_wdata_wb),
+      .we_a_i   (rf_we_wb)
     );
   end
-  // tmrg translate on
 
-  // tmrg translate off
   ///////////////////////////////
   // Scrambling Infrastructure //
   ///////////////////////////////
+
   if (ICacheScramble) begin : gen_scramble
 
     // SEC_CM: ICACHE.MEM.SCRAMBLE
@@ -571,11 +613,12 @@ module ibex_top #(
     assign scramble_req_o = scramble_req_q;
 
   end else begin : gen_noscramble
-  // tmrg translate on
 
     logic unused_scramble_inputs = scramble_key_valid_i & (|scramble_key_i) & (|RndCnstIbexKey) &
                                    (|scramble_nonce_i) & (|RndCnstIbexNonce) & scramble_req_q &
-                                   ic_scr_key_req & scramble_key_valid_d & scramble_req_d;
+                                   ic_scr_key_req & scramble_key_valid_d & scramble_req_d &
+                                   (|scramble_key_q) & (|scramble_nonce_q) & scramble_key_valid_q &
+                                   scramble_key_valid_d;
 
     assign scramble_req_d       = 1'b0;
     assign scramble_req_q       = 1'b0;
@@ -584,14 +627,15 @@ module ibex_top #(
     assign scramble_nonce_q     = '0;
     assign scramble_key_valid_q = 1'b1;
     assign scramble_key_valid_d = 1'b1;
-  // tmrg translate off
   end
-  // tmrg translate on
 
-  // tmrg translate off
   ////////////////////////
   // Rams Instantiation //
   ////////////////////////
+
+  logic [IC_NUM_WAYS-1:0] icache_tag_alert;
+  logic [IC_NUM_WAYS-1:0] icache_data_alert;
+
   if (ICache) begin : gen_rams
 
     for (genvar way = 0; way < IC_NUM_WAYS; way++) begin : gen_rams_inner
@@ -601,33 +645,39 @@ module ibex_top #(
         // SEC_CM: ICACHE.MEM.SCRAMBLE
         // Tag RAM instantiation
         prim_ram_1p_scr #(
-          .Width            (TagSizeECC),
-          .Depth            (IC_NUM_LINES),
-          .DataBitsPerMask  (TagSizeECC),
-          .EnableParity     (0),
-          .NumAddrScrRounds (NumAddrScrRounds)
+          .Width              (TagSizeECC),
+          .Depth              (IC_NUM_LINES),
+          .DataBitsPerMask    (TagSizeECC),
+          .EnableParity       (0),
+          .NumPrinceRoundsHalf(ICacheScrNumPrinceRoundsHalf),
+          .NumAddrScrRounds   (NumAddrScrRounds)
         ) tag_bank (
           .clk_i,
           .rst_ni,
 
-          .key_valid_i (scramble_key_valid_q),
-          .key_i       (scramble_key_q),
-          .nonce_i     (scramble_nonce_q),
+          .key_valid_i      (scramble_key_valid_q),
+          .key_i            (scramble_key_q),
+          .nonce_i          (scramble_nonce_q),
 
-          .req_i       (ic_tag_req[way]),
+          .req_i            (ic_tag_req[way]),
 
-          .gnt_o       (),
-          .write_i     (ic_tag_write),
-          .addr_i      (ic_tag_addr),
-          .wdata_i     (ic_tag_wdata),
-          .wmask_i     ({TagSizeECC{1'b1}}),
-          .intg_error_i(1'b0),
+          .gnt_o            (),
+          .write_i          (ic_tag_write),
+          .addr_i           (ic_tag_addr),
+          .wdata_i          (ic_tag_wdata),
+          .wmask_i          ({TagSizeECC{1'b1}}),
+          .intg_error_i     (1'b0),
 
-          .rdata_o     (ic_tag_rdata[way]),
-          .rvalid_o    (),
-          .raddr_o     (),
-          .rerror_o    (),
-          .cfg_i       (ram_cfg_i)
+          .rdata_o          (ic_tag_rdata[way]),
+          .rvalid_o         (),
+          .raddr_o          (),
+          .rerror_o         (),
+          .cfg_i            (ram_cfg_icache_tag_i[way]),
+          .cfg_o            (ram_cfg_icache_tag_o[way]),
+          .wr_collision_o   (),
+          .write_pending_o  (),
+
+          .alert_o          (icache_tag_alert[way])
         );
 
         // Data RAM instantiation
@@ -637,29 +687,35 @@ module ibex_top #(
           .DataBitsPerMask    (LineSizeECC),
           .ReplicateKeyStream (1),
           .EnableParity       (0),
+          .NumPrinceRoundsHalf(ICacheScrNumPrinceRoundsHalf),
           .NumAddrScrRounds   (NumAddrScrRounds)
         ) data_bank (
           .clk_i,
           .rst_ni,
 
-          .key_valid_i (scramble_key_valid_q),
-          .key_i       (scramble_key_q),
-          .nonce_i     (scramble_nonce_q),
+          .key_valid_i      (scramble_key_valid_q),
+          .key_i            (scramble_key_q),
+          .nonce_i          (scramble_nonce_q),
 
-          .req_i       (ic_data_req[way]),
+          .req_i            (ic_data_req[way]),
 
-          .gnt_o       (),
-          .write_i     (ic_data_write),
-          .addr_i      (ic_data_addr),
-          .wdata_i     (ic_data_wdata),
-          .wmask_i     ({LineSizeECC{1'b1}}),
-          .intg_error_i(1'b0),
+          .gnt_o            (),
+          .write_i          (ic_data_write),
+          .addr_i           (ic_data_addr),
+          .wdata_i          (ic_data_wdata),
+          .wmask_i          ({LineSizeECC{1'b1}}),
+          .intg_error_i     (1'b0),
 
-          .rdata_o     (ic_data_rdata[way]),
-          .rvalid_o    (),
-          .raddr_o     (),
-          .rerror_o    (),
-          .cfg_i       (ram_cfg_i)
+          .rdata_o          (ic_data_rdata[way]),
+          .rvalid_o         (),
+          .raddr_o          (),
+          .rerror_o         (),
+          .cfg_i            (ram_cfg_icache_data_i[way]),
+          .cfg_o            (ram_cfg_icache_data_o[way]),
+          .wr_collision_o   (),
+          .write_pending_o  (),
+
+          .alert_o          (icache_data_alert[way])
         );
 
         `ifdef INC_ASSERT
@@ -701,6 +757,7 @@ module ibex_top #(
           .DataBitsPerMask  (TagSizeECC)
         ) tag_bank (
           .clk_i,
+          .rst_ni,
 
           .req_i       (ic_tag_req[way]),
 
@@ -709,8 +766,9 @@ module ibex_top #(
           .wdata_i     (ic_tag_wdata),
           .wmask_i     ({TagSizeECC{1'b1}}),
 
-          .rdata_o     (ic_tag_rdata[way])
-          // .cfg_i       (ram_cfg_i)
+          .rdata_o     (ic_tag_rdata[way]),
+          .cfg_i       (ram_cfg_icache_tag_i[way]),
+          .cfg_o       (ram_cfg_icache_tag_o[way])
         );
 
         // Data RAM instantiation
@@ -720,6 +778,7 @@ module ibex_top #(
           .DataBitsPerMask    (LineSizeECC)
         ) data_bank (
           .clk_i,
+          .rst_ni,
 
           .req_i       (ic_data_req[way]),
 
@@ -728,49 +787,46 @@ module ibex_top #(
           .wdata_i     (ic_data_wdata),
           .wmask_i     ({LineSizeECC{1'b1}}),
 
-          .rdata_o     (ic_data_rdata[way])
-          // .cfg_i       (ram_cfg_i)
+          .rdata_o     (ic_data_rdata[way]),
+          .cfg_i       (ram_cfg_icache_data_i[way]),
+          .cfg_o       (ram_cfg_icache_data_o[way])
         );
 
+        assign icache_tag_alert  = '{default:'b0};
+        assign icache_data_alert = '{default:'b0};
       end
     end
 
   end else begin : gen_norams
-  // tmrg translate on
 
-    prim_ram_1p_pkg::ram_1p_cfg_t unused_ram_cfg;
+    logic unused_ram_cfg;
     logic unused_ram_inputs;
 
-    assign unused_ram_cfg    = ram_cfg_i;
-    assign unused_ram_inputs = (|ic_tag_req) & ic_tag_write & (|ic_tag_addr) & (|ic_tag_wdata) &
-                               (|ic_data_req) & ic_data_write & (|ic_data_addr) & (|ic_data_wdata) &
-                               (|scramble_key_q) & (|scramble_nonce_q) & scramble_key_valid_q &
-                               scramble_key_valid_d & (|scramble_nonce_q) &
-                               (|NumAddrScrRounds);
+    assign unused_ram_cfg        = |{ram_cfg_icache_tag_i, ram_cfg_icache_data_i};
+    assign ram_cfg_icache_tag_o  = '{default: prim_ram_1p_pkg::RAM_1P_CFG_RSP_DEFAULT};
+    assign ram_cfg_icache_data_o = '{default: prim_ram_1p_pkg::RAM_1P_CFG_RSP_DEFAULT};
+    assign unused_ram_inputs     = (|ic_tag_req) & ic_tag_write & (|ic_tag_addr) &
+                                   (|ic_tag_wdata) & (|ic_data_req) & ic_data_write &
+                                   (|ic_data_addr) & (|ic_data_wdata) & (|NumAddrScrRounds);
 
     assign ic_tag_rdata      = '{default:'b0};
     assign ic_data_rdata     = '{default:'b0};
 
-  // tmrg translate off
+    assign icache_tag_alert  = '{default:'b0};
+    assign icache_data_alert = '{default:'b0};
   end
-  // tmrg translate on
 
-  assign data_wdata_o = data_wdata_core[31:0];
+  assign trvk_wdata = data_wdata_core[31:0];
 
-  // tmrg translate off
   if (MemECC) begin : gen_mem_wdata_ecc
     prim_buf #(.Width(7)) u_prim_buf_data_wdata_intg (
       .in_i (data_wdata_core[38:32]),
-      .out_o(data_wdata_intg_o)
+      .out_o(trvk_wdata_intg)
     );
   end else begin : gen_no_mem_ecc
-  // tmrg translate on
-    assign data_wdata_intg_o = '0;
-  // tmrg translate off
+    assign trvk_wdata_intg = '0;
   end
-  // tmrg translate on
 
-  // tmrg translate off
   // Redundant lockstep core implementation
   if (Lockstep) begin : gen_lockstep
     // SEC_CM: LOGIC.SHADOW
@@ -789,24 +845,17 @@ module ibex_top #(
       instr_addr_o,
       instr_rdata_core,
       instr_err_i,
-      data_req_o,
-      data_gnt_i,
-      data_rvalid_i,
-      data_we_o,
-      data_be_o,
-      data_addr_o,
-      data_wdata_core,
+      trvk_req,
+      trvk_gnt,
+      trvk_rvalid,
+      trvk_we,
+      trvk_be,
+      trvk_addr,
+      trvk_wdata,
       data_rdata_core,
-      data_err_i,
-      dummy_instr_id,
-      dummy_instr_wb,
-      rf_raddr_a,
-      rf_raddr_b,
-      rf_waddr_wb,
-      rf_we_wb,
-      rf_wdata_wb_ecc,
-      rf_rdata_a_ecc,
-      rf_rdata_b_ecc,
+      trvk_err,
+      rf_rdata_a,
+      rf_rdata_b,
       ic_tag_req,
       ic_tag_write,
       ic_tag_addr,
@@ -827,6 +876,7 @@ module ibex_top #(
       crash_dump_o,
       double_fault_seen_o,
       fetch_enable_i,
+      mcounteren_writable_i,
       core_busy_d
     });
 
@@ -848,19 +898,12 @@ module ibex_top #(
     logic                         data_we_local;
     logic [3:0]                   data_be_local;
     logic [31:0]                  data_addr_local;
-    logic [MemDataWidth-1:0]      data_wdata_local;
+    logic [31:0]                  data_wdata_local;
     logic [MemDataWidth-1:0]      data_rdata_local;
     logic                         data_err_local;
 
-    logic                         dummy_instr_id_local;
-    logic                         dummy_instr_wb_local;
-    logic [4:0]                   rf_raddr_a_local;
-    logic [4:0]                   rf_raddr_b_local;
-    logic [4:0]                   rf_waddr_wb_local;
-    logic                         rf_we_wb_local;
-    logic [RegFileDataWidth-1:0]  rf_wdata_wb_ecc_local;
-    logic [RegFileDataWidth-1:0]  rf_rdata_a_ecc_local;
-    logic [RegFileDataWidth-1:0]  rf_rdata_b_ecc_local;
+    logic [RegFileDataWidth-1:0]  rf_rdata_a_local;
+    logic [RegFileDataWidth-1:0]  rf_rdata_b_local;
 
     logic [IC_NUM_WAYS-1:0]       ic_tag_req_local;
     logic                         ic_tag_write_local;
@@ -884,6 +927,7 @@ module ibex_top #(
     crash_dump_t                  crash_dump_local;
     logic                         double_fault_seen_local;
     ibex_mubi_t                   fetch_enable_local;
+    ibex_mubi_t                   mcounteren_writable_local;
 
     ibex_mubi_t                   core_busy_local;
 
@@ -896,24 +940,17 @@ module ibex_top #(
       instr_addr_o,
       instr_rdata_core,
       instr_err_i,
-      data_req_o,
-      data_gnt_i,
-      data_rvalid_i,
-      data_we_o,
-      data_be_o,
-      data_addr_o,
-      data_wdata_core,
+      trvk_req,
+      trvk_gnt,
+      trvk_rvalid,
+      trvk_we,
+      trvk_be,
+      trvk_addr,
+      trvk_wdata,
       data_rdata_core,
-      data_err_i,
-      dummy_instr_id,
-      dummy_instr_wb,
-      rf_raddr_a,
-      rf_raddr_b,
-      rf_waddr_wb,
-      rf_we_wb,
-      rf_wdata_wb_ecc,
-      rf_rdata_a_ecc,
-      rf_rdata_b_ecc,
+      trvk_err,
+      rf_rdata_a,
+      rf_rdata_b,
       ic_tag_req,
       ic_tag_write,
       ic_tag_addr,
@@ -934,6 +971,7 @@ module ibex_top #(
       crash_dump_o,
       double_fault_seen_o,
       fetch_enable_i,
+      mcounteren_writable_i,
       core_busy_d
     };
 
@@ -955,15 +993,8 @@ module ibex_top #(
       data_wdata_local,
       data_rdata_local,
       data_err_local,
-      dummy_instr_id_local,
-      dummy_instr_wb_local,
-      rf_raddr_a_local,
-      rf_raddr_b_local,
-      rf_waddr_wb_local,
-      rf_we_wb_local,
-      rf_wdata_wb_ecc_local,
-      rf_rdata_a_ecc_local,
-      rf_rdata_b_ecc_local,
+      rf_rdata_a_local,
+      rf_rdata_b_local,
       ic_tag_req_local,
       ic_tag_write_local,
       ic_tag_addr_local,
@@ -984,6 +1015,7 @@ module ibex_top #(
       crash_dump_local,
       double_fault_seen_local,
       fetch_enable_local,
+      mcounteren_writable_local,
       core_busy_local
     } = buf_out;
 
@@ -1010,99 +1042,115 @@ module ibex_top #(
     logic lockstep_alert_major_bus_local;
 
     ibex_lockstep #(
-      .PMPEnable        (PMPEnable),
-      .PMPGranularity   (PMPGranularity),
-      .PMPNumRegions    (PMPNumRegions),
-      .MHPMCounterNum   (MHPMCounterNum),
-      .MHPMCounterWidth (MHPMCounterWidth),
-      .RV32E            (RV32E),
-      .RV32M            (RV32M),
-      .RV32B            (RV32B),
-      .BranchTargetALU  (BranchTargetALU),
-      .ICache           (ICache),
-      .ICacheECC        (ICacheECC),
-      .BusSizeECC       (BusSizeECC),
-      .TagSizeECC       (TagSizeECC),
-      .LineSizeECC      (LineSizeECC),
-      .BranchPredictor  (BranchPredictor),
-      .DbgTriggerEn     (DbgTriggerEn),
-      .DbgHwBreakNum    (DbgHwBreakNum),
-      .WritebackStage   (WritebackStage),
-      .ResetAll         (ResetAll),
-      .RndCnstLfsrSeed  (RndCnstLfsrSeed),
-      .RndCnstLfsrPerm  (RndCnstLfsrPerm),
-      .SecureIbex       (SecureIbex),
-      .DummyInstructions(DummyInstructions),
-      .RegFileECC       (RegFileECC),
-      .RegFileDataWidth (RegFileDataWidth),
-      .MemECC           (MemECC),
-      .DmHaltAddr       (DmHaltAddr),
-      .DmExceptionAddr  (DmExceptionAddr)
+      .PMPEnable            (PMPEnable),
+      .PMPGranularity       (PMPGranularity),
+      .PMPNumRegions        (PMPNumRegions),
+      .PMPRstCfg            (PMPRstCfg),
+      .PMPRstAddr           (PMPRstAddr),
+      .PMPRstMsecCfg        (PMPRstMsecCfg),
+      .MHPMCounterNum       (MHPMCounterNum),
+      .MHPMCounterWidth     (MHPMCounterWidth),
+      .RV32E                (RV32E),
+      .RV32M                (RV32M),
+      .RV32B                (RV32B),
+      .RV32ZC               (RV32ZC),
+      .BranchTargetALU      (BranchTargetALU),
+      .ICache               (ICache),
+      .ICacheECC            (ICacheECC),
+      .ICacheTweakInfection (ICacheTweakInfection),
+      .BusSizeECC           (BusSizeECC),
+      .TagSizeECC           (TagSizeECC),
+      .LineSizeECC          (LineSizeECC),
+      .BranchPredictor      (BranchPredictor),
+      .DbgTriggerEn         (DbgTriggerEn),
+      .DbgHwBreakNum        (DbgHwBreakNum),
+      .WritebackStage       (WritebackStage),
+      .ResetAll             (ResetAll),
+      .RndCnstLfsrSeed      (RndCnstLfsrSeed),
+      .RndCnstLfsrPerm      (RndCnstLfsrPerm),
+      .SecureIbex           (SecureIbex),
+      .LockstepOffset       (LockstepOffset),
+      .DummyInstructions    (DummyInstructions),
+      .RegFileECC           (RegFileLockstepECC),
+      .RegFileDataWidth     (RegFileDataWidth),
+      .RegFileDataEccWidth  (RegFileDataEccWidth),
+      .RegFile              (RegFile),
+      .MemECC               (MemECC),
+      .DmBaseAddr           (DmBaseAddr),
+      .DmAddrMask           (DmAddrMask),
+      .DmHaltAddr           (DmHaltAddr),
+      .DmExceptionAddr      (DmExceptionAddr),
+      .CsrMvendorId         (CsrMvendorId),
+      .CsrMimpId            (CsrMimpId)
     ) u_ibex_lockstep (
-      .clk_i                  (clk),
-      .rst_ni                 (rst_ni),
+      .clk_i                    (clk),
+      .rst_ni                   (rst_ni),
 
-      .hart_id_i              (hart_id_local),
-      .boot_addr_i            (boot_addr_local),
+      .hart_id_i                (hart_id_local),
+      .boot_addr_i              (boot_addr_local),
 
-      .instr_req_i            (instr_req_local),
-      .instr_gnt_i            (instr_gnt_local),
-      .instr_rvalid_i         (instr_rvalid_local),
-      .instr_addr_i           (instr_addr_local),
-      .instr_rdata_i          (instr_rdata_local),
-      .instr_err_i            (instr_err_local),
+      .instr_req_i              (instr_req_local),
+      .instr_gnt_i              (instr_gnt_local),
+      .instr_rvalid_i           (instr_rvalid_local),
+      .instr_addr_i             (instr_addr_local),
+      .instr_rdata_i            (instr_rdata_local),
+      .instr_err_i              (instr_err_local),
 
-      .data_req_i             (data_req_local),
-      .data_gnt_i             (data_gnt_local),
-      .data_rvalid_i          (data_rvalid_local),
-      .data_we_i              (data_we_local),
-      .data_be_i              (data_be_local),
-      .data_addr_i            (data_addr_local),
-      .data_wdata_i           (data_wdata_local),
-      .data_rdata_i           (data_rdata_local),
-      .data_err_i             (data_err_local),
+      .data_req_i               (data_req_local),
+      .data_gnt_i               (data_gnt_local),
+      .data_rvalid_i            (data_rvalid_local),
+      .data_we_i                (data_we_local),
+      .data_be_i                (data_be_local),
+      .data_addr_i              (data_addr_local),
+      .data_wdata_i             (data_wdata_local),
+      .data_rdata_i             (data_rdata_local),
+      .data_err_i               (data_err_local),
 
-      .dummy_instr_id_i       (dummy_instr_id_local),
-      .dummy_instr_wb_i       (dummy_instr_wb_local),
-      .rf_raddr_a_i           (rf_raddr_a_local),
-      .rf_raddr_b_i           (rf_raddr_b_local),
-      .rf_waddr_wb_i          (rf_waddr_wb_local),
-      .rf_we_wb_i             (rf_we_wb_local),
-      .rf_wdata_wb_ecc_i      (rf_wdata_wb_ecc_local),
-      .rf_rdata_a_ecc_i       (rf_rdata_a_ecc_local),
-      .rf_rdata_b_ecc_i       (rf_rdata_b_ecc_local),
+      .rf_rdata_a_i             (rf_rdata_a_local),
+      .rf_rdata_b_i             (rf_rdata_b_local),
 
-      .ic_tag_req_i           (ic_tag_req_local),
-      .ic_tag_write_i         (ic_tag_write_local),
-      .ic_tag_addr_i          (ic_tag_addr_local),
-      .ic_tag_wdata_i         (ic_tag_wdata_local),
-      .ic_tag_rdata_i         (ic_tag_rdata_local),
-      .ic_data_req_i          (ic_data_req_local),
-      .ic_data_write_i        (ic_data_write_local),
-      .ic_data_addr_i         (ic_data_addr_local),
-      .ic_data_wdata_i        (ic_data_wdata_local),
-      .ic_data_rdata_i        (ic_data_rdata_local),
-      .ic_scr_key_valid_i     (scramble_key_valid_local),
-      .ic_scr_key_req_i       (ic_scr_key_req_local),
+      .ic_tag_req_i             (ic_tag_req_local),
+      .ic_tag_write_i           (ic_tag_write_local),
+      .ic_tag_addr_i            (ic_tag_addr_local),
+      .ic_tag_wdata_i           (ic_tag_wdata_local),
+      .ic_tag_rdata_i           (ic_tag_rdata_local),
+      .ic_data_req_i            (ic_data_req_local),
+      .ic_data_write_i          (ic_data_write_local),
+      .ic_data_addr_i           (ic_data_addr_local),
+      .ic_data_wdata_i          (ic_data_wdata_local),
+      .ic_data_rdata_i          (ic_data_rdata_local),
+      .ic_scr_key_valid_i       (scramble_key_valid_local),
+      .ic_scr_key_req_i         (ic_scr_key_req_local),
 
-      .irq_software_i         (irq_software_local),
-      .irq_timer_i            (irq_timer_local),
-      .irq_external_i         (irq_external_local),
-      .irq_fast_i             (irq_fast_local),
-      .irq_nm_i               (irq_nm_local),
-      .irq_pending_i          (irq_pending_local),
+      .irq_software_i           (irq_software_local),
+      .irq_timer_i              (irq_timer_local),
+      .irq_external_i           (irq_external_local),
+      .irq_fast_i               (irq_fast_local),
+      .irq_nm_i                 (irq_nm_local),
+      .irq_pending_i            (irq_pending_local),
 
-      .debug_req_i            (debug_req_local),
-      .crash_dump_i           (crash_dump_local),
-      .double_fault_seen_i    (double_fault_seen_local),
+      .debug_req_i              (debug_req_local),
+      .crash_dump_i             (crash_dump_local),
+      .double_fault_seen_i      (double_fault_seen_local),
 
-      .fetch_enable_i         (fetch_enable_local),
-      .alert_minor_o          (lockstep_alert_minor_local),
-      .alert_major_internal_o (lockstep_alert_major_internal_local),
-      .alert_major_bus_o      (lockstep_alert_major_bus_local),
-      .core_busy_i            (core_busy_local),
-      .test_en_i              (test_en_i),
-      .scan_rst_ni            (scan_rst_ni)
+      .fetch_enable_i           (fetch_enable_local),
+      .mcounteren_writable_i    (mcounteren_writable_local),
+      .alert_minor_o            (lockstep_alert_minor_local),
+      .alert_major_internal_o   (lockstep_alert_major_internal_local),
+      .alert_major_bus_o        (lockstep_alert_major_bus_local),
+      .core_busy_i              (core_busy_local),
+      .test_en_i                (test_en_i),
+      .scan_rst_ni              (scan_rst_ni),
+
+      .lockstep_cmp_en_o        (lockstep_cmp_en_o),
+      .data_req_shadow_o        (data_req_shadow_o),
+      .data_we_shadow_o         (data_we_shadow_o),
+      .data_be_shadow_o         (data_be_shadow_o),
+      .data_addr_shadow_o       (data_addr_shadow_o),
+      .data_wdata_shadow_o      (data_wdata_shadow_o),
+      .data_wdata_intg_shadow_o (data_wdata_intg_shadow_o),
+      .instr_req_shadow_o       (instr_req_shadow_o),
+      .instr_addr_shadow_o      (instr_addr_shadow_o)
     );
 
     prim_buf u_prim_buf_alert_minor (
@@ -1121,30 +1169,146 @@ module ibex_top #(
     );
 
   end else begin : gen_no_lockstep
-  // tmrg translate on
     assign lockstep_alert_major_internal = 1'b0;
     assign lockstep_alert_major_bus      = 1'b0;
     assign lockstep_alert_minor          = 1'b0;
+
+    assign lockstep_cmp_en_o             = IbexMuBiOff;
+    assign data_req_shadow_o             = 1'b0;
+    assign data_we_shadow_o              = 1'b0;
+    assign data_be_shadow_o              = '0;
+    assign data_addr_shadow_o            = '0;
+    assign data_wdata_shadow_o           = '0;
+    assign data_wdata_intg_shadow_o      = '0;
+    assign instr_req_shadow_o            = 1'b0;
+    assign instr_addr_shadow_o           = '0;
+
     logic unused_scan;
     assign unused_scan = scan_rst_ni;
-  // tmrg translate off
   end
-  // tmrg translate on
 
-  assign alert_major_internal_o = core_alert_major_internal |
+
+  //////////
+  // TRVK //
+  //////////
+
+  if (BaseIsa == BaseIsaRV32IorCHERIoT) begin : gen_cheriot_trvk
+    ibex_trvk #(
+      .NumOutstanding(MaxOutstandingDSideAccesses),
+      .MemECC(MemECC),
+      .RevBitmapAddrWidth(CheriotRevBitmapAddrWidth),
+      .RevBitmapBaseAddr(CheriotRevBitmapBaseAddr)
+    ) i_ibex_trvk (
+      .clk_i                  (clk),
+      .rst_ni                 (rst_ni),
+      .heap_base_addr_i       (trvk_heap_base_addr_i),
+      .upstream_req_i         (trvk_req),
+      .upstream_gnt_o         (trvk_gnt),
+      .upstream_rvalid_o      (trvk_rvalid),
+      .upstream_we_i          (trvk_we),
+      .upstream_be_i          (trvk_be),
+      .upstream_addr_i        (trvk_addr),
+      .upstream_wdata_i       (trvk_wdata),
+      .upstream_wdata_intg_i  (trvk_wdata_intg),
+      .upstream_rdata_o       (trvk_rdata),
+      .upstream_rdata_intg_o  (trvk_rdata_intg),
+      .upstream_err_o         (trvk_err),
+      .upstream_tag_i         (trvk_wtag),
+      .upstream_tag_o         (trvk_rtag),
+      .downstream_req_o       (data_req_o),
+      .downstream_gnt_i       (data_gnt_i),
+      .downstream_rvalid_i    (data_rvalid_i),
+      .downstream_we_o        (data_we_o),
+      .downstream_be_o        (data_be_o),
+      .downstream_addr_o      (data_addr_o),
+      .downstream_wdata_o     (data_wdata_o),
+      .downstream_wdata_intg_o(data_wdata_intg_o),
+      .downstream_rdata_i     (data_rdata_i),
+      .downstream_rdata_intg_i(data_rdata_intg_i),
+      .downstream_err_i       (data_err_i),
+      .downstream_tag_o       (data_tag_o),
+      .downstream_tag_i       (data_tag_i),
+      .revbm_req_o            (trvk_revbm_req_o),
+      .revbm_gnt_i            (trvk_revbm_gnt_i),
+      .revbm_rvalid_i         (trvk_revbm_rvalid_i),
+      .revbm_addr_o           (trvk_revbm_addr_o),
+      .revbm_rdata_i          (trvk_revbm_rdata_i),
+      .revbm_rdata_intg_i     (trvk_revbm_rdata_intg_i),
+      .revbm_err_i            (trvk_revbm_err_i),
+      .revbm_data_intg_error_o(trvk_revbm_data_intg_error),
+      .revbm_device_error_o   (trvk_revbm_device_error)
+    );
+
+    // Tag connection towards the core is tied-off for now. This will change as soon as the core
+    // is updated to feature CHERIoT support.
+    logic unused_trvk;
+    assign trvk_wtag   = 1'b0;
+    assign unused_trvk = trvk_rtag;
+
+  end else begin : gen_no_cheriot_trvk
+
+    logic unused_trvk;
+
+    assign trvk_revbm_req_o           = '0;
+    assign trvk_revbm_addr_o          = '0;
+    // Currently tied-off trvk_wtag as the core does not connect this signal yet.
+    assign trvk_wtag                  = 1'b0;
+    assign trvk_rtag                  = 1'b0;
+    assign data_tag_o                 = 1'b0;
+    assign trvk_revbm_data_intg_error = 1'b0;
+    assign trvk_revbm_device_error    = 1'b0;
+    assign unused_trvk = ^{
+      trvk_heap_base_addr_i,
+      trvk_revbm_gnt_i,
+      trvk_revbm_rvalid_i,
+      trvk_revbm_rdata_i,
+      trvk_revbm_rdata_intg_i,
+      trvk_revbm_err_i,
+      trvk_wtag,
+      // Currently consumed as unused as the core does not consume this signal yet.
+      trvk_rtag,
+      data_tag_i
+    };
+
+    // Through-connect TRVK
+    assign data_req_o        = trvk_req;
+    assign trvk_gnt          = data_gnt_i;
+    assign trvk_rvalid       = data_rvalid_i;
+    assign data_we_o         = trvk_we;
+    assign data_be_o         = trvk_be;
+    assign data_addr_o       = trvk_addr;
+    assign data_wdata_o      = trvk_wdata;
+    assign data_wdata_intg_o = trvk_wdata_intg;
+    assign trvk_rdata        = data_rdata_i;
+    assign trvk_rdata_intg   = data_rdata_intg_i;
+    assign trvk_err          = data_err_i;
+  end
+
+
+  // Enable or disable iCache multi bit encoding checking error generation.
+  // If enabled and a MuBi encoding error is detected, raise a major alert.
+  logic icache_alert_major_internal;
+  assign icache_alert_major_internal = (|icache_tag_alert) | (|icache_data_alert);
+
+  assign alert_major_internal_o = core_alert_major_internal     |
                                   lockstep_alert_major_internal |
-                                  rf_alert_major_internal;
-  assign alert_major_bus_o      = core_alert_major_bus | lockstep_alert_major_bus;
+                                  icache_alert_major_internal;
+  assign alert_major_bus_o      = core_alert_major_bus       |
+                                  lockstep_alert_major_bus   |
+                                  trvk_revbm_data_intg_error |
+                                  trvk_revbm_device_error;
   assign alert_minor_o          = core_alert_minor | lockstep_alert_minor;
 
-  // tmrg translate off
   // X checks for top-level outputs
   `ASSERT_KNOWN(IbexInstrReqX, instr_req_o)
   `ASSERT_KNOWN_IF(IbexInstrReqPayloadX, instr_addr_o, instr_req_o)
 
   `ASSERT_KNOWN(IbexDataReqX, data_req_o)
   `ASSERT_KNOWN_IF(IbexDataReqPayloadX,
-    {data_we_o, data_be_o, data_addr_o, data_wdata_o, data_wdata_intg_o}, data_req_o)
+    {data_we_o, data_be_o, data_addr_o, data_wdata_o, data_wdata_intg_o, data_tag_o}, data_req_o)
+
+  `ASSERT_KNOWN(IbexTrvkRevbmReqX, trvk_revbm_req_o)
+  `ASSERT_KNOWN_IF(IbexTrvkRevbmReqPayloadX, trvk_revbm_addr_o, trvk_revbm_req_o)
 
   `ASSERT_KNOWN(IbexScrambleReqX, scramble_req_o)
   `ASSERT_KNOWN(IbexDoubleFaultSeenX, double_fault_seen_o)
@@ -1155,9 +1319,11 @@ module ibex_top #(
 
   // X check for top-level inputs
   `ASSERT_KNOWN(IbexTestEnX, test_en_i)
-  `ASSERT_KNOWN(IbexRamCfgX, ram_cfg_i)
+  `ASSERT_KNOWN(IbexRamCfgTagX, ram_cfg_icache_tag_i)
+  `ASSERT_KNOWN(IbexRamCfgDataX, ram_cfg_icache_data_i)
   `ASSERT_KNOWN(IbexHartIdX, hart_id_i)
   `ASSERT_KNOWN(IbexBootAddrX, boot_addr_i)
+  `ASSERT_KNOWN(IbexTrvkHeapBaseAddrX, trvk_heap_base_addr_i)
 
   `ASSERT_KNOWN(IbexInstrGntX, instr_gnt_i)
   `ASSERT_KNOWN(IbexInstrRValidX, instr_rvalid_i)
@@ -1166,13 +1332,13 @@ module ibex_top #(
 
   `ASSERT_KNOWN(IbexDataGntX, data_gnt_i)
   `ASSERT_KNOWN(IbexDataRValidX, data_rvalid_i)
-  `ifdef INC_ASSERT
-    // Ibex can have a maximum of 2 accesses outstanding on the DSide. This is because it does not
-    // speculative data accesses so the only requests that can be in flight must relate to a single
-    // ongoing load or store instruction. Due to unaligned access support a single load or store can
-    // generate 2 accesses.
-    localparam int unsigned MaxOutstandingDSideAccesses = 2;
 
+  `ASSERT_KNOWN(IbexTrvkRevbmGntX, trvk_revbm_gnt_i)
+  `ASSERT_KNOWN(IbexTrvkRevbmRValidX, trvk_revbm_rvalid_i)
+  `ASSERT_KNOWN_IF(IbexTrvkRevbmRPayloadX,
+    {trvk_revbm_rdata_i, trvk_revbm_rdata_intg_i, trvk_revbm_err_i}, trvk_revbm_rvalid_i)
+
+  `ifdef INC_ASSERT
     typedef struct packed {
       logic valid;
       logic is_read;
@@ -1248,9 +1414,9 @@ module ibex_top #(
           data_rvalid_i & pending_dside_accesses_q[0].is_read)
     end
 
-    // data_err_i relevant to both reads and writes. Check it isn't X on any response.
-    `ASSERT_KNOWN_IF(IbexDataRErrPayloadX, data_err_i, data_rvalid_i)
-    `endif
+    // data_err_i and data_tag_i are relevant to both reads and writes. Check neither is X on any
+    // response.
+    `ASSERT_KNOWN_IF(IbexDataRErrPayloadX, {data_err_i, data_tag_i}, data_rvalid_i)
 
     `ifdef RVFI
     // Tracking logic and predictor for double_fault_seen_o output, relies on RVFI so only include
@@ -1331,6 +1497,7 @@ module ibex_top #(
     `ASSERT(DoubleFaultPulseOnlyOnDoubleFault,
       double_fault_seen_o |-> ##[0:DoubleFaultSeenLatency] double_fault_seen_predicted)
     `endif // RVFI
+  `endif
 
   `ASSERT_KNOWN(IbexIrqX, {irq_software_i, irq_timer_i, irq_external_i, irq_fast_i, irq_nm_i})
 
@@ -1369,7 +1536,7 @@ module ibex_top #(
       .err_o      (data_ecc_err)
     );
     `ASSERT(MajorAlertOnDMemIntegrityErr,
-      data_rvalid_i && (|data_ecc_err) |-> ##[0:5] alert_major_bus_o)
+      trvk_rvalid && (|data_ecc_err) |-> ##[0:5] alert_major_bus_o)
 
     prim_secded_inv_39_32_dec u_instr_intg_dec (
       .data_i     (instr_rdata_core),
@@ -1381,7 +1548,5 @@ module ibex_top #(
     `ASSERT(MajorAlertOnIMemIntegrityErr,
       instr_rvalid_i && (|instr_ecc_err) |-> ##[0:5] alert_major_bus_o)
   end
-  `endif // INC_ASSERT
-  // tmrg translate on
-
+  `endif
 endmodule
