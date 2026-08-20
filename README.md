@@ -29,7 +29,8 @@ A small JSON file supplies what can't be inferred from the SV source alone: the 
             "mode":  "target",
             "ports": {"PSEL": "psel", "PADDR": "bus_req_i.paddr"}
         }
-    }
+    },
+    "registerFile": "Register_map.rdl"
 }
 ```
 
