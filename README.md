@@ -59,10 +59,10 @@ See the module docstring in `sv2ipxact.py` for the full schema and more examples
 
 ## Tests
 
-`test/` contains a CMake-based example suite. `test/sv2ipxact.cmake` exposes a `sv2ipxact()` CMake function; `test/CMakeLists.txt` uses it to generate IP-XACT components for a handful of examples: a trivial combinational module (`adder`), two full-size open-source RISC-V cores exercising struct-typed ports (`cva6`, `ibex`), and a minimal APB4 peripheral shown both with discrete bus signals and with packed-struct ports (`apb_gpio`, `apb_gpio_packed`) against a hand-written APB4 bus/abstraction definition (`test/bus_library/apb4/`).
+`examples/` contains a CMake-based example suite. `examples/sv2ipxact.cmake` exposes a `sv2ipxact()` CMake function; `examples/CMakeLists.txt` uses it to generate IP-XACT components for a handful of examples: a trivial combinational module (`adder`), two full-size open-source RISC-V cores exercising struct-typed ports (`cva6`, `ibex`), and a minimal APB4 peripheral shown both with discrete bus signals and with packed-struct ports (`apb_gpio`, `apb_gpio_packed`) against a hand-written APB4 bus/abstraction definition (`examples/bus_library/apb4/`).
 
 ```sh
-cd test
+cd examples
 python3 -m venv .venv && .venv/bin/pip install -r python_requirements.txt
 mkdir build && cd build
 cmake ..

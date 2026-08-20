@@ -5,7 +5,7 @@ include(./sv2ipxact.cmake)
 
 find_package (Python3 COMPONENTS Interpreter Development)
 
-project(ipxact_test)
+project(ipxact_examples)
 
 enable_testing()
 
